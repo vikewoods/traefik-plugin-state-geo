@@ -18,6 +18,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Mount the entire plugins-local directory
       - /mnt/traefik-data/plugins-local:/plugins-local # <- THIS is the important part
+      - /mnt/project-a/custom-block.html:/templates/project-a.html:ro
     deploy:
       placement:
         constraints: [node.role == manager]
@@ -44,6 +45,7 @@ services:
         # Define the middleware
         - "traefik.http.middlewares.geo-block.plugin.stateblock.dbPath=/plugins-local/src/github.com/vikewoods/traefik-plugin-state-geo/data/GeoLite2-City.mmdb" # <- THIS is the important part
         - "traefik.http.middlewares.geo-block.plugin.stateblock.templatePath=/plugins-local/src/github.com/vikewoods/traefik-plugin-state-geo/data/blocked.html"
+        - "traefik.http.middlewares.project-a-block.plugin.stateblock.templatePath=/templates/project-a.html" # <- This is the path to your custom template
         - "traefik.http.middlewares.geo-block.plugin.stateblock.blockedStates=CA,CT,DE,ID,LA,MI,MS,MT,NJ,NY,NV,WA"
         - "traefik.http.middlewares.geo-block.plugin.stateblock.whitelistedIPs=1.2.3.4,11.22.33.44"
         
