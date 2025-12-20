@@ -1,0 +1,23 @@
+image: golang:1.23
+
+cache:
+  paths:
+    - .go/pkg/mod
+
+variables:
+  GOPATH: $CI_PROJECT_DIR/.go
+
+stages:
+  - test
+
+run_tests:
+  stage: test
+  script:
+    - go mod tidy
+    - ls -lh data/
+    - go test -v ./...
+  artifacts:
+    when: always
+    paths:
+      - data/
+    expire_in: 1 week
