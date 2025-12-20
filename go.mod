@@ -1,6 +1,6 @@
 module github.com/vikewoods/traefik-plugin-state-geo
 
-go 1.25.5
+go 1.24.0
 
 require github.com/oschwald/geoip2-golang/v2 v2.0.1
 
