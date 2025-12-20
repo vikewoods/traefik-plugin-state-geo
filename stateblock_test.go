@@ -16,6 +16,7 @@ func TestStateBlock(t *testing.T) {
 
 	cfg := CreateConfig()
 	cfg.BlockedStates = []string{"CA"}
+	cfg.WhitelistedIPs = []string{"1.2.3.4"}
 	cfg.DBPath = dbPath
 
 	ctx := context.Background()
@@ -34,13 +35,23 @@ func TestStateBlock(t *testing.T) {
 		expected   int
 	}{
 		{
-			name:       "Blocked State (CA)",
-			remoteAddr: "8.8.8.8:1234",
+			name:       "Allowed US State (NY)",
+			remoteAddr: "161.185.160.93:1234", // NYC IP
+			expected:   http.StatusOK,
+		},
+		{
+			name:       "Blocked US State (CA)",
+			remoteAddr: "76.79.129.110:1234", // San Francisco, CA
 			expected:   http.StatusForbidden,
 		},
 		{
-			name:       "Allowed IP",
-			remoteAddr: "1.1.1.1:1234",
+			name:       "Blocked Foreign Country (UK)",
+			remoteAddr: "140.228.62.31:1234", // UK IP
+			expected:   http.StatusForbidden,
+		},
+		{
+			name:       "Whitelisted IP (Regardless of Location)",
+			remoteAddr: "1.2.3.4:1234",
 			expected:   http.StatusOK,
 		},
 	}
