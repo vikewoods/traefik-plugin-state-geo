@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"strings"
 
 	"github.com/oschwald/geoip2-golang/v2"
@@ -15,6 +16,7 @@ type Config struct {
 	BlockedStates  []string `json:"blockedStates,omitempty"`
 	WhitelistedIPs []string `json:"whitelistedIPs,omitempty"`
 	DBPath         string   `json:"dbPath,omitempty"`
+	TemplatePath   string   `json:"templatePath,omitempty"`
 }
 
 func CreateConfig() *Config {
@@ -22,6 +24,7 @@ func CreateConfig() *Config {
 		BlockedStates:  []string{},
 		WhitelistedIPs: []string{},
 		DBPath:         "/plugins-local/geoip.mmdb",
+		TemplatePath:   "",
 	}
 }
 
@@ -30,6 +33,7 @@ type StateBlock struct {
 	blockedStates  map[string]struct{}
 	whitelistedIPs map[string]struct{}
 	db             *geoip2.Reader
+	templatePath   string
 	name           string
 }
 
@@ -57,9 +61,27 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		blockedStates:  blockedMap,
 		whitelistedIPs: whitelistMap,
 		db:             db,
+		templatePath:   config.TemplatePath,
 		next:           next,
 		name:           name,
 	}, nil
+}
+
+func (a *StateBlock) serveBlocked(rw http.ResponseWriter, state string) {
+	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
+	rw.WriteHeader(http.StatusForbidden)
+
+	if a.templatePath != "" {
+		content, err := os.ReadFile(a.templatePath)
+		if err == nil {
+			html := strings.ReplaceAll(string(content), "{{STATE}}", state)
+			_, _ = rw.Write([]byte(html))
+			return
+		}
+		fmt.Printf("[%s] Error reading template file: %v\n", a.name, err)
+	}
+
+	_, _ = rw.Write([]byte(fmt.Sprintf("<h1>Access Denied</h1><p>State: %s</p>", state)))
 }
 
 func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
@@ -80,9 +102,7 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		} else {
 			// FIRST: Block everyone who is NOT from the US
 			if record.Country.ISOCode != "US" {
-				fmt.Printf("[%s] Blocked: Non-US traffic from %s (IP: %s)\n", a.name, record.Country.ISOCode, ipStr)
-				rw.WriteHeader(http.StatusForbidden)
-				_, _ = rw.Write([]byte("Access restricted to specific US states only."))
+				a.serveBlocked(rw, record.Country.ISOCode)
 				return
 			}
 
@@ -90,17 +110,11 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			if len(record.Subdivisions) > 0 {
 				stateCode := record.Subdivisions[0].ISOCode
 				if _, ok := a.blockedStates[stateCode]; ok {
-					fmt.Printf("[%s] Blocked: US State %s is in block-list (IP: %s)\n", a.name, stateCode, ipStr)
-					rw.WriteHeader(http.StatusForbidden)
-					_, _ = rw.Write([]byte(fmt.Sprintf("Access denied from state: %s", stateCode)))
+					a.serveBlocked(rw, stateCode)
 					return
 				}
-				// If not blocked, allow through
-				fmt.Printf("[%s] Allowed: US State %s (IP: %s)\n", a.name, stateCode, ipStr)
 			} else {
-				// Safety: US IP but no state data found
-				fmt.Printf("[%s] Blocked: US IP %s with no state data\n", a.name, ipStr)
-				rw.WriteHeader(http.StatusForbidden)
+				a.serveBlocked(rw, "Unknown")
 				return
 			}
 		}
