@@ -1,8 +1,8 @@
 displayName: State Block Middleware
 type: middleware
-import: github.com/your-username/traefik-plugin-state-geo
+import: github.com/vikewoods/traefik-plugin-state-geo
 
-summary: Blocks requests based on Cloudflare's CF-Region header.
+summary: Blocks requests based on US state.
 
 testData:
   blockedStates:
