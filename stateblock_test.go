@@ -57,9 +57,15 @@ func TestStateBlock(t *testing.T) {
 			expectContent: "CA",
 		},
 		{
-			name:         "Blocked Foreign Country (UK)",
-			remoteAddr:   "140.228.62.31:1234", // UK IP
+			name:         "Whitelisted IP (GB)",
+			remoteAddr:   "140.228.62.31:1234", // GB IP
 			expectedCode: http.StatusOK,
+		},
+		{
+			name:          "Blocked IP (GB)",
+			remoteAddr:    "140.228.62.32:1234", // GB IP
+			expectedCode:  http.StatusForbidden,
+			expectContent: "GB",
 		},
 		{
 			name:         "Whitelisted IP (Regardless of Location)",

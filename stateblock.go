@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/oschwald/maxminddb-golang"
 )
@@ -27,13 +28,21 @@ func CreateConfig() *Config {
 	}
 }
 
+type cacheEntry struct {
+	allowed   bool
+	stateCode string
+}
+
 type StateBlock struct {
 	next           http.Handler
 	blockedStates  map[string]struct{}
 	whitelistedIPs map[string]struct{}
 	db             *maxminddb.Reader
 	templatePath   string
+	templateCache  string
 	name           string
+	cache          map[string]cacheEntry
+	cacheMutex     sync.RWMutex
 }
 
 type geoRecord struct {
@@ -55,6 +64,16 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		return nil, fmt.Errorf("failed to open geoip database: %w", err)
 	}
 
+	var templateContent string
+	if config.TemplatePath != "" {
+		content, err := os.ReadFile(config.TemplatePath)
+		if err == nil {
+			templateContent = string(content)
+		} else {
+			fmt.Fprintf(os.Stderr, "[%s] ERROR: failed to pre-load template: %v\n", name, err)
+		}
+	}
+
 	blockedMap := make(map[string]struct{})
 	for _, state := range config.BlockedStates {
 		blockedMap[strings.ToUpper(state)] = struct{}{}
@@ -70,8 +89,10 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		whitelistedIPs: whitelistMap,
 		db:             db,
 		templatePath:   config.TemplatePath,
+		templateCache:  templateContent,
 		next:           next,
 		name:           name,
+		cache:          make(map[string]cacheEntry),
 	}, nil
 }
 
@@ -79,14 +100,12 @@ func (a *StateBlock) serveBlocked(rw http.ResponseWriter, state string) {
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(http.StatusForbidden)
 
-	if a.templatePath != "" {
-		content, err := os.ReadFile(a.templatePath)
-		if err == nil {
-			html := strings.ReplaceAll(string(content), "{{STATE}}", state)
-			_, _ = rw.Write([]byte(html))
-			return
-		}
-		fmt.Printf("[%s] Error reading template file: %v\n", a.name, err)
+	fmt.Printf("[%s] DEBUG: Blocking request from state: %s\n", a.name, state)
+
+	if a.templateCache != "" {
+		html := strings.ReplaceAll(a.templateCache, "{{STATE}}", state)
+		_, _ = rw.Write([]byte(html))
+		return
 	}
 
 	_, _ = rw.Write([]byte(fmt.Sprintf("<h1>Access Denied</h1><p>State: %s</p>", state)))
@@ -95,41 +114,68 @@ func (a *StateBlock) serveBlocked(rw http.ResponseWriter, state string) {
 func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	ipStr := getRemoteIP(req)
 
-	fmt.Printf("[%s] Processing request from IP: '%s'\n", a.name, ipStr)
-
+	// 1. Check Whitelist first (Static)
 	if _, ok := a.whitelistedIPs[ipStr]; ok {
-		fmt.Printf("[%s] Whitelisted IP allowed: %s\n", a.name, ipStr)
+		fmt.Printf("[%s] DEBUG: IP %s is whitelisted, allowing\n", a.name, ipStr)
 		a.next.ServeHTTP(rw, req)
 		return
 	}
+
+	// 2. Check Decision Cache
+	a.cacheMutex.RLock()
+	entry, found := a.cache[ipStr]
+	a.cacheMutex.RUnlock()
+
+	if found {
+		if entry.allowed {
+			fmt.Printf("[%s] DEBUG: Cache hit for %s: ALLOWED\n", a.name, ipStr)
+			a.next.ServeHTTP(rw, req)
+		} else {
+			fmt.Printf("[%s] DEBUG: Cache hit for %s: BLOCKED (%s)\n", a.name, ipStr, entry.stateCode)
+			a.serveBlocked(rw, entry.stateCode)
+		}
+		return
+	}
+
+	// 3. Database Lookup
+	isAllowed := true
+	stateCode := ""
 
 	ip := net.ParseIP(ipStr)
 	if ip != nil {
 		var record geoRecord
 		err := a.db.Lookup(ip, &record)
 		if err != nil {
-			fmt.Printf("[%s] GeoIP error for IP %s: %v\n", a.name, ipStr, err)
+			fmt.Fprintf(os.Stderr, "[%s] ERROR: GeoIP lookup failed for %s: %v\n", a.name, ipStr, err)
 		} else {
-			// FIRST: Block everyone who is NOT from the US
 			if record.Country.IsoCode != "US" {
-				a.serveBlocked(rw, record.Country.IsoCode)
-				return
-			}
-
-			// SECOND: If they ARE from US, check if they are in the blocked states list
-			if len(record.Subdivisions) > 0 {
-				stateCode := record.Subdivisions[0].IsoCode
+				isAllowed = false
+				stateCode = record.Country.IsoCode
+			} else if len(record.Subdivisions) > 0 {
+				stateCode = record.Subdivisions[0].IsoCode
 				if _, ok := a.blockedStates[stateCode]; ok {
-					a.serveBlocked(rw, stateCode)
-					return
+					isAllowed = false
 				}
 			} else {
-				a.serveBlocked(rw, "Unknown")
-				return
+				isAllowed = false
+				stateCode = "Unknown"
 			}
 		}
 	}
 
+	// 4. Update Cache
+	a.cacheMutex.Lock()
+	if len(a.cache) < 1000 {
+		a.cache[ipStr] = cacheEntry{allowed: isAllowed, stateCode: stateCode}
+	}
+	a.cacheMutex.Unlock()
+
+	if !isAllowed {
+		a.serveBlocked(rw, stateCode)
+		return
+	}
+
+	fmt.Printf("[%s] DEBUG: New IP %s allowed (State: %s)\n", a.name, ipStr, stateCode)
 	a.next.ServeHTTP(rw, req)
 }
 
