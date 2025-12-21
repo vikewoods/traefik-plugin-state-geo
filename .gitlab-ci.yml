@@ -12,6 +12,8 @@ stages:
 
 run_tests:
   stage: test
+  tags:
+    - docker
   script:
     - go mod tidy
     - ls -lh data/
