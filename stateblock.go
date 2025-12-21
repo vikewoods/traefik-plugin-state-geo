@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/oschwald/geoip2-golang"
+	"github.com/oschwald/maxminddb-golang"
 )
 
 type Config struct {
@@ -31,9 +31,18 @@ type StateBlock struct {
 	next           http.Handler
 	blockedStates  map[string]struct{}
 	whitelistedIPs map[string]struct{}
-	db             *geoip2.Reader
+	db             *maxminddb.Reader
 	templatePath   string
 	name           string
+}
+
+type geoRecord struct {
+	Country struct {
+		IsoCode string `maxminddb:"iso_code"`
+	} `maxminddb:"country"`
+	Subdivisions []struct {
+		IsoCode string `maxminddb:"iso_code"`
+	} `maxminddb:"subdivisions"`
 }
 
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
@@ -41,7 +50,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		return nil, fmt.Errorf("dbPath cannot be empty")
 	}
 
-	db, err := geoip2.Open(config.DBPath)
+	db, err := maxminddb.Open(config.DBPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open geoip database: %w", err)
 	}
@@ -87,15 +96,14 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	ipStr := getRemoteIP(req)
 
 	if _, ok := a.whitelistedIPs[ipStr]; ok {
-		fmt.Printf("[%s] Whitelisted IP allowed: %s\n", a.name, ipStr)
 		a.next.ServeHTTP(rw, req)
 		return
 	}
 
 	ip := net.ParseIP(ipStr)
-
 	if ip != nil {
-		record, err := a.db.City(ip)
+		var record geoRecord
+		err := a.db.Lookup(ip, &record)
 		if err != nil {
 			fmt.Printf("[%s] GeoIP error for IP %s: %v\n", a.name, ipStr, err)
 		} else {
