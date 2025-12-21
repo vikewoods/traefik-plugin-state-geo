@@ -95,7 +95,10 @@ func (a *StateBlock) serveBlocked(rw http.ResponseWriter, state string) {
 func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	ipStr := getRemoteIP(req)
 
+	fmt.Printf("[%s] Processing request from IP: '%s'\n", a.name, ipStr)
+
 	if _, ok := a.whitelistedIPs[ipStr]; ok {
+		fmt.Printf("[%s] Whitelisted IP allowed: %s\n", a.name, ipStr)
 		a.next.ServeHTTP(rw, req)
 		return
 	}
@@ -131,12 +134,23 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 }
 
 func getRemoteIP(req *http.Request) string {
+	// Check CF-Connecting-Ip header first
+	if cf := req.Header.Get("Cf-Connecting-Ip"); cf != "" {
+		return strings.TrimSpace(cf)
+	}
+
 	// Check X-Forwarded-For if behind proxies
 	if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")
+		// Trim spaces
 		return strings.TrimSpace(parts[0])
 	}
+
 	// Fallback to RemoteAddr
-	ip, _, _ := net.SplitHostPort(req.RemoteAddr)
-	return ip
+	res, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err != nil {
+		// If SplitHostPort fails (e.g. no port), return raw RemoteAddr trimmed
+		return strings.TrimSpace(req.RemoteAddr)
+	}
+	return strings.TrimSpace(res)
 }

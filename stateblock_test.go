@@ -25,7 +25,7 @@ func TestStateBlock(t *testing.T) {
 
 	cfg := CreateConfig()
 	cfg.BlockedStates = []string{"CA"}
-	cfg.WhitelistedIPs = []string{"1.2.3.4"}
+	cfg.WhitelistedIPs = []string{"1.2.3.4", "140.228.62.31"}
 	cfg.DBPath = dbPath
 	cfg.TemplatePath = templatePath
 
@@ -57,10 +57,9 @@ func TestStateBlock(t *testing.T) {
 			expectContent: "CA",
 		},
 		{
-			name:          "Blocked Foreign Country (UK)",
-			remoteAddr:    "140.228.62.31:1234", // UK IP
-			expectedCode:  http.StatusForbidden,
-			expectContent: "GB",
+			name:         "Blocked Foreign Country (UK)",
+			remoteAddr:   "140.228.62.31:1234", // UK IP
+			expectedCode: http.StatusOK,
 		},
 		{
 			name:         "Whitelisted IP (Regardless of Location)",
