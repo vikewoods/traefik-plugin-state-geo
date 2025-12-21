@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"strings"
 
-	"github.com/oschwald/geoip2-golang/v2"
+	"github.com/oschwald/geoip2-golang"
 )
 
 type Config struct {
@@ -93,22 +92,22 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	ip, err := netip.ParseAddr(ipStr)
+	ip := net.ParseIP(ipStr)
 
-	if err == nil {
+	if ip != nil {
 		record, err := a.db.City(ip)
 		if err != nil {
 			fmt.Printf("[%s] GeoIP error for IP %s: %v\n", a.name, ipStr, err)
 		} else {
 			// FIRST: Block everyone who is NOT from the US
-			if record.Country.ISOCode != "US" {
-				a.serveBlocked(rw, record.Country.ISOCode)
+			if record.Country.IsoCode != "US" {
+				a.serveBlocked(rw, record.Country.IsoCode)
 				return
 			}
 
 			// SECOND: If they ARE from US, check if they are in the blocked states list
 			if len(record.Subdivisions) > 0 {
-				stateCode := record.Subdivisions[0].ISOCode
+				stateCode := record.Subdivisions[0].IsoCode
 				if _, ok := a.blockedStates[stateCode]; ok {
 					a.serveBlocked(rw, stateCode)
 					return
