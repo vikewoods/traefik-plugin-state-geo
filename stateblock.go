@@ -13,10 +13,11 @@ import (
 )
 
 type Config struct {
-	BlockedStates  []string `json:"blockedStates,omitempty"`
-	WhitelistedIPs []string `json:"whitelistedIPs,omitempty"`
-	DBPath         string   `json:"dbPath,omitempty"`
-	TemplatePath   string   `json:"templatePath,omitempty"`
+	BlockedStates    []string `json:"blockedStates,omitempty"`
+	WhitelistedIPs   []string `json:"whitelistedIPs,omitempty"`
+	WhitelistedPaths []string `json:"whitelistedPaths,omitempty"`
+	DBPath           string   `json:"dbPath,omitempty"`
+	TemplatePath     string   `json:"templatePath,omitempty"`
 }
 
 func CreateConfig() *Config {
@@ -34,15 +35,16 @@ type cacheEntry struct {
 }
 
 type StateBlock struct {
-	next           http.Handler
-	blockedStates  map[string]struct{}
-	whitelistedIPs map[string]struct{}
-	db             *maxminddb.Reader
-	templatePath   string
-	templateCache  string
-	name           string
-	cache          map[string]cacheEntry
-	cacheMutex     sync.RWMutex
+	next             http.Handler
+	blockedStates    map[string]struct{}
+	whitelistedIPs   map[string]struct{}
+	whitelistedPaths map[string]struct{}
+	db               *maxminddb.Reader
+	templatePath     string
+	templateCache    string
+	name             string
+	cache            map[string]cacheEntry
+	cacheMutex       sync.RWMutex
 }
 
 type geoRecord struct {
@@ -84,16 +86,31 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		whitelistMap[ip] = struct{}{}
 	}
 
+	whitelistedPathsMap := make(map[string]struct{})
+	for _, path := range config.WhitelistedPaths {
+		whitelistedPathsMap[path] = struct{}{}
+	}
+
 	return &StateBlock{
-		blockedStates:  blockedMap,
-		whitelistedIPs: whitelistMap,
-		db:             db,
-		templatePath:   config.TemplatePath,
-		templateCache:  templateContent,
-		next:           next,
-		name:           name,
-		cache:          make(map[string]cacheEntry),
+		blockedStates:    blockedMap,
+		whitelistedIPs:   whitelistMap,
+		whitelistedPaths: whitelistedPathsMap,
+		db:               db,
+		templatePath:     config.TemplatePath,
+		templateCache:    templateContent,
+		next:             next,
+		name:             name,
+		cache:            make(map[string]cacheEntry),
 	}, nil
+}
+
+func (a *StateBlock) isPathWhitelisted(reqPath string) bool {
+	for whitelistedPath := range a.whitelistedPaths {
+		if strings.HasPrefix(reqPath, whitelistedPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *StateBlock) serveBlocked(rw http.ResponseWriter, state string) {
@@ -112,6 +129,13 @@ func (a *StateBlock) serveBlocked(rw http.ResponseWriter, state string) {
 }
 
 func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	// 0. Check paths whitelist first
+	if a.isPathWhitelisted(req.URL.Path) {
+		fmt.Printf("[%s] DEBUG: Path %s is whitelisted, allowing\n", a.name, req.URL.Path)
+		a.next.ServeHTTP(rw, req)
+		return
+	}
+
 	ipStr := getRemoteIP(req)
 
 	// 1. Check Whitelist first (Static)
