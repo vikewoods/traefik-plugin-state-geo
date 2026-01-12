@@ -48,6 +48,9 @@ services:
         - "traefik.http.middlewares.project-a-block.plugin.stateblock.templatePath=/templates/project-a.html" # <- This is the path to your custom template
         - "traefik.http.middlewares.geo-block.plugin.stateblock.blockedStates=CA,CT,DE,ID,LA,MI,MS,MT,NJ,NY,NV,WA"
         - "traefik.http.middlewares.geo-block.plugin.stateblock.whitelistedIPs=1.2.3.4,11.22.33.44"
+        -  "traefik.http.middlewares.state-blocker.plugin.state-geo.whitelistedPaths[0]=/.well-known/"
+        - "traefik.http.middlewares.state-blocker.plugin.state-geo.whitelistedPaths[1]=/health"
+        - "traefik.http.middlewares.state-blocker.plugin.state-geo.whitelistedPaths[2]=/api/public/"
         
         # Attach the middleware to the router
         - "traefik.http.routers.my-app.middlewares=geo-block"
