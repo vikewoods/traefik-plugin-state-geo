@@ -11,3 +11,6 @@ testData:
   whitelistedIPs:
     - 1.2.3.4
     - 192.168.1.1
+  whitelistedPaths:
+    - "/.well-known"
+    - "/api/health"

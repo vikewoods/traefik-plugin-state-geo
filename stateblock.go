@@ -18,6 +18,14 @@ type Config struct {
 	WhitelistedPaths []string `json:"whitelistedPaths,omitempty"`
 	DBPath           string   `json:"dbPath,omitempty"`
 	TemplatePath     string   `json:"templatePath,omitempty"`
+
+	// VPN/Proxy/Tor Blocking
+	EnableVPNBlocking bool   `json:"enableVPNBlocking,omitempty"`
+	AnonDBPath        string `json:"anonDBPath,omitempty"`
+	BlockVPN          bool   `json:"blockVPN,omitempty"`
+	BlockProxy        bool   `json:"blockProxy,omitempty"`
+	BlockHosting      bool   `json:"blockHosting,omitempty"`
+	BlockTor          bool   `json:"blockTor,omitempty"`
 }
 
 func CreateConfig() *Config {
@@ -30,8 +38,9 @@ func CreateConfig() *Config {
 }
 
 type cacheEntry struct {
-	allowed   bool
-	stateCode string
+	allowed     bool
+	stateCode   string
+	blockReason string
 }
 
 type StateBlock struct {
@@ -40,6 +49,12 @@ type StateBlock struct {
 	whitelistedIPs   map[string]struct{}
 	whitelistedPaths map[string]struct{}
 	db               *maxminddb.Reader
+	anonDB           *maxminddb.Reader
+	enableVPNBlock   bool
+	blockVPN         bool
+	blockProxy       bool
+	blockHosting     bool
+	blockTor         bool
 	templatePath     string
 	templateCache    string
 	name             string
@@ -54,6 +69,15 @@ type geoRecord struct {
 	Subdivisions []struct {
 		IsoCode string `maxminddb:"iso_code"`
 	} `maxminddb:"subdivisions"`
+}
+
+type anonRecord struct {
+	IsAnonymous        bool `maxminddb:"is_anonymous"`
+	IsAnonymousVPN     bool `maxminddb:"is_anonymous_vpn"`
+	IsHostingProvider  bool `maxminddb:"is_hosting_provider"`
+	IsPublicProxy      bool `maxminddb:"is_public_proxy"`
+	IsTorExitNode      bool `maxminddb:"is_tor_exit_node"`
+	IsResidentialProxy bool `maxminddb:"is_residential_proxy"`
 }
 
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
@@ -113,6 +137,31 @@ func (a *StateBlock) isPathWhitelisted(reqPath string) bool {
 	return false
 }
 
+func (a *StateBlock) checkAnonymousIP(ip net.IP) string {
+	var record anonRecord
+	err := a.anonDB.Lookup(ip, &record)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] ERROR: Anonymous IP lookup failed: %v\n", a.name, err)
+		return ""
+	}
+
+	// Check in priority order
+	if a.blockTor && record.IsTorExitNode {
+		return "TOR"
+	}
+	if a.blockVPN && record.IsAnonymousVPN {
+		return "VPN"
+	}
+	if a.blockProxy && (record.IsPublicProxy || record.IsResidentialProxy) {
+		return "PROXY"
+	}
+	if a.blockHosting && record.IsHostingProvider {
+		return "HOSTING"
+	}
+
+	return "" // Not blocked
+}
+
 func (a *StateBlock) serveBlocked(rw http.ResponseWriter, state string) {
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(http.StatusForbidden)
@@ -161,11 +210,31 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// 3. Database Lookup
+	// 3. VPN/Proxy/Tor Check
+	ip := net.ParseIP(ipStr)
+	if ip != nil && a.anonDB != nil {
+		blockReason := a.checkAnonymousIP(ip)
+		if blockReason != "" {
+			// Cache the VPN/Proxy block decision
+			a.cacheMutex.Lock()
+			if len(a.cache) < 1000 {
+				a.cache[ipStr] = cacheEntry{
+					allowed:     false,
+					blockReason: blockReason,
+				}
+			}
+			a.cacheMutex.Unlock()
+
+			a.serveBlocked(rw, blockReason)
+			return
+		}
+	}
+
+	// 4. Database Lookup
 	isAllowed := true
 	stateCode := ""
 
-	ip := net.ParseIP(ipStr)
+	//ip := net.ParseIP(ipStr)
 	if ip != nil {
 		var record geoRecord
 		err := a.db.Lookup(ip, &record)
@@ -187,7 +256,7 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// 4. Update Cache
+	// 5. Update Cache
 	a.cacheMutex.Lock()
 	if len(a.cache) < 1000 {
 		a.cache[ipStr] = cacheEntry{allowed: isAllowed, stateCode: stateCode}

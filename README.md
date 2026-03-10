@@ -51,6 +51,12 @@ services:
         -  "traefik.http.middlewares.state-blocker.plugin.state-geo.whitelistedPaths[0]=/.well-known/"
         - "traefik.http.middlewares.state-blocker.plugin.state-geo.whitelistedPaths[1]=/health"
         - "traefik.http.middlewares.state-blocker.plugin.state-geo.whitelistedPaths[2]=/api/public/"
+        - "traefik.http.middlewares.geo-block.plugin.stateblock.enableVPNBlocking=true"
+        - "traefik.http.middlewares.geo-block.plugin.stateblock.anonDBPath=/plugins-local/GeoIP2-Anonymous-IP.mmdb"
+        - "traefik.http.middlewares.geo-block.plugin.stateblock.blockVPN=true"
+        - "traefik.http.middlewares.geo-block.plugin.stateblock.blockProxy=true"
+        - "traefik.http.middlewares.geo-block.plugin.stateblock.blockTor=true"
+        - "traefik.http.middlewares.geo-block.plugin.stateblock.blockHosting=false"
         
         # Attach the middleware to the router
         - "traefik.http.routers.my-app.middlewares=geo-block"
