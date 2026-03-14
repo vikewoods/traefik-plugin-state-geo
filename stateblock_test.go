@@ -282,3 +282,132 @@ func TestPathWhitelistWithProxyHeaders(t *testing.T) {
 		t.Errorf("Expected whitelisted path to work with X-Forwarded-For, got status %d", recorder.Code)
 	}
 }
+
+func TestNoDBPathFailOpenPassThrough(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.DBPath = ""
+	cfg.FailOpen = true
+
+	ctx := context.Background()
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write([]byte("pass"))
+	})
+
+	handler, err := New(ctx, next, cfg, "no-dbpath-failopen-test")
+	if err != nil {
+		t.Fatalf("expected middleware initialization to succeed, got error: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, "http://localhost", nil)
+	req.RemoteAddr = "76.79.129.110:1234"
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if recorder.Body.String() != "pass" {
+		t.Fatalf("expected body %q, got %q", "pass", recorder.Body.String())
+	}
+}
+
+func TestMissingDBFileFailOpenPassThrough(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.DBPath = "data/does-not-exist.mmdb"
+	cfg.FailOpen = true
+
+	ctx := context.Background()
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write([]byte("pass"))
+	})
+
+	handler, err := New(ctx, next, cfg, "missing-db-failopen-test")
+	if err != nil {
+		t.Fatalf("expected middleware initialization to succeed, got error: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, "http://localhost", nil)
+	req.RemoteAddr = "76.79.129.110:1234"
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if recorder.Body.String() != "pass" {
+		t.Fatalf("expected body %q, got %q", "pass", recorder.Body.String())
+	}
+}
+
+func TestMissingDBFileFailClosedReturnsError(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.DBPath = "data/does-not-exist.mmdb"
+	cfg.FailOpen = false
+
+	ctx := context.Background()
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+	})
+
+	_, err := New(ctx, next, cfg, "missing-db-failclosed-test")
+	if err == nil {
+		t.Fatal("expected initialization to fail when dbPath is invalid and failOpen=false, got nil error")
+	}
+}
+
+func TestTemplateHTMLUsedForBlockedResponse(t *testing.T) {
+	tmpDir := t.TempDir()
+	templatePath := tmpDir + "/template.html"
+	fileTemplate := "<html><body>FILE TEMPLATE {{STATE}}</body></html>"
+	if err := os.WriteFile(templatePath, []byte(fileTemplate), 0644); err != nil {
+		t.Fatalf("failed to write temp template file: %v", err)
+	}
+
+	cfg := CreateConfig()
+	cfg.DBPath = ""
+	cfg.FailOpen = true
+	cfg.TemplatePath = templatePath
+	cfg.TemplateHTML = "<html><body>INLINE TEMPLATE {{STATE}}</body></html>"
+
+	ctx := context.Background()
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+	})
+
+	handler, err := New(ctx, next, cfg, "template-html-priority-test")
+	if err != nil {
+		t.Fatalf("expected middleware initialization to succeed, got error: %v", err)
+	}
+
+	stateBlock, ok := handler.(*StateBlock)
+	if !ok {
+		t.Fatalf("expected handler type *StateBlock, got %T", handler)
+	}
+
+	recorder := httptest.NewRecorder()
+	stateBlock.serveBlocked(recorder, "CA")
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, recorder.Code)
+	}
+
+	contentType := recorder.Header().Get("Content-Type")
+	if !strings.Contains(contentType, "text/html") {
+		t.Fatalf("expected Content-Type to contain text/html, got %s", contentType)
+	}
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, "INLINE TEMPLATE CA") {
+		t.Fatalf("expected inline template to be used, body: %s", body)
+	}
+	if strings.Contains(body, "FILE TEMPLATE") {
+		t.Fatalf("did not expect templatePath content when templateHTML is set, body: %s", body)
+	}
+	if strings.Contains(body, "Access Denied") {
+		t.Fatalf("did not expect built-in fallback when templateHTML is set, body: %s", body)
+	}
+}

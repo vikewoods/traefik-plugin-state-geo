@@ -18,14 +18,18 @@ type Config struct {
 	WhitelistedPaths []string `json:"whitelistedPaths,omitempty"`
 	DBPath           string   `json:"dbPath,omitempty"`
 	TemplatePath     string   `json:"templatePath,omitempty"`
+	TemplateHTML     string   `json:"templateHTML,omitempty"`
+	FailOpen         bool     `json:"failOpen,omitempty"`
 }
 
 func CreateConfig() *Config {
 	return &Config{
 		BlockedStates:  []string{},
 		WhitelistedIPs: []string{},
-		DBPath:         "/plugins-local/geoip.mmdb",
+		DBPath:         "",
 		TemplatePath:   "",
+		TemplateHTML:   "",
+		FailOpen:       true,
 	}
 }
 
@@ -57,17 +61,26 @@ type geoRecord struct {
 }
 
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
-	if config.DBPath == "" {
-		return nil, fmt.Errorf("dbPath cannot be empty")
-	}
+	var db *maxminddb.Reader
 
-	db, err := maxminddb.Open(config.DBPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open geoip database: %w", err)
+	if config.DBPath == "" {
+		fmt.Fprintf(os.Stderr, "[%s] WARN: dbPath is empty; GeoIP database not loaded. Operating in fail-open pass-through mode.\n", name)
+	} else {
+		openedDB, err := maxminddb.Open(config.DBPath)
+		if err != nil {
+			if !config.FailOpen {
+				return nil, fmt.Errorf("failed to open geoip database: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "[%s] WARN: failed to open geoip database at %s: %v. Operating in fail-open pass-through mode.\n", name, config.DBPath, err)
+		} else {
+			db = openedDB
+		}
 	}
 
 	var templateContent string
-	if config.TemplatePath != "" {
+	if config.TemplateHTML != "" {
+		templateContent = config.TemplateHTML
+	} else if config.TemplatePath != "" {
 		content, err := os.ReadFile(config.TemplatePath)
 		if err == nil {
 			templateContent = string(content)
@@ -141,6 +154,12 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	// 1. Check Whitelist first (Static)
 	if _, ok := a.whitelistedIPs[ipStr]; ok {
 		fmt.Printf("[%s] DEBUG: IP %s is whitelisted, allowing\n", a.name, ipStr)
+		a.next.ServeHTTP(rw, req)
+		return
+	}
+
+	// 1.5 If DB is unavailable, fail-open pass-through
+	if a.db == nil {
 		a.next.ServeHTTP(rw, req)
 		return
 	}
