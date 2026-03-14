@@ -1,8 +1,8 @@
-displayName: State Block Middleware
+displayName: State Geo Block Middleware
 type: middleware
 import: github.com/vikewoods/traefik-plugin-state-geo
 
-summary: Blocks requests based on US state.
+summary: Blocks all traffic outside of US and requests by US state using MaxMind GeoLite2 and supports custom block pages.
 
 testData:
   blockedStates:
@@ -10,4 +10,14 @@ testData:
     - NY
   whitelistedIPs:
     - 1.2.3.4
-    - 192.168.1.1
+  whitelistedPaths:
+    - /health
+  templateHTML: |
+    <!doctype html>
+    <html>
+      <body>
+        <h1>Access denied</h1>
+        <p>State: {{STATE}}</p>
+      </body>
+    </html>
+  failOpen: true
