@@ -2,12 +2,50 @@ package traefik_plugin_state_geo
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 )
+
+type mockGeoResult struct {
+	country   string
+	state     string
+	lookupErr error
+}
+
+func newTestMiddleware(t *testing.T, cfg *Config, geo mockGeoResult) *StateBlock {
+	t.Helper()
+
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write([]byte("OK"))
+	})
+
+	cfg.DBPath = ""
+	cfg.FailOpen = true
+
+	handler, err := New(context.Background(), next, cfg, "test-plugin")
+	if err != nil {
+		t.Fatalf("expected no error creating middleware, got %v", err)
+	}
+
+	sb, ok := handler.(*StateBlock)
+	if !ok {
+		t.Fatalf("expected handler to be *StateBlock")
+	}
+
+	sb.mockGeoLookup = func(ip net.IP) (string, string, error) {
+		if geo.lookupErr != nil {
+			return "", "", geo.lookupErr
+		}
+		return geo.country, geo.state, nil
+	}
+
+	return sb
+}
 
 func TestStateBlock(t *testing.T) {
 	dbPath := "data/GeoLite2-City.mmdb"
@@ -409,5 +447,202 @@ func TestTemplateHTMLUsedForBlockedResponse(t *testing.T) {
 	}
 	if strings.Contains(body, "Access Denied") {
 		t.Fatalf("did not expect built-in fallback when templateHTML is set, body: %s", body)
+	}
+}
+
+func TestCreateConfigDefaults(t *testing.T) {
+	cfg := CreateConfig()
+
+	if !cfg.BlockNonUS {
+		t.Fatalf("expected BlockNonUS default to be true")
+	}
+
+	if !cfg.BlockUSStates {
+		t.Fatalf("expected BlockUSStates default to be true")
+	}
+}
+
+func TestNonUSBlockedWhenEnabled(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.BlockNonUS = true
+	cfg.BlockUSStates = true
+
+	handler := newTestMiddleware(t, cfg, mockGeoResult{
+		country: "GB",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.RemoteAddr = "8.8.8.8:12345"
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-US when blockNonUS=true, got %d", rr.Code)
+	}
+}
+
+func TestNonUSAllowedWhenDisabled(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.BlockNonUS = false
+	cfg.BlockUSStates = true
+
+	handler := newTestMiddleware(t, cfg, mockGeoResult{
+		country: "GB",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.RemoteAddr = "8.8.8.8:12345"
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for non-US when blockNonUS=false, got %d", rr.Code)
+	}
+}
+
+func TestBlockedUSStateWhenEnabled(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.BlockUSStates = true
+	cfg.BlockedStates = []string{"CA"}
+
+	handler := newTestMiddleware(t, cfg, mockGeoResult{
+		country: "US",
+		state:   "CA",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.RemoteAddr = "8.8.8.8:12345"
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for blocked US state when blockUSStates=true, got %d", rr.Code)
+	}
+}
+
+func TestBlockedUSStateIgnoredWhenDisabled(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.BlockUSStates = false
+	cfg.BlockedStates = []string{"CA"}
+
+	handler := newTestMiddleware(t, cfg, mockGeoResult{
+		country: "US",
+		state:   "CA",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.RemoteAddr = "8.8.8.8:12345"
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for blocked US state when blockUSStates=false, got %d", rr.Code)
+	}
+}
+
+func TestUSWithoutSubdivisionBlockedWhenStateBlockingEnabled(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.BlockUSStates = true
+
+	handler := newTestMiddleware(t, cfg, mockGeoResult{
+		country: "US",
+		state:   "",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.RemoteAddr = "8.8.8.8:12345"
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for US without subdivision when blockUSStates=true, got %d", rr.Code)
+	}
+}
+
+func TestUSWithoutSubdivisionAllowedWhenStateBlockingDisabled(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.BlockUSStates = false
+
+	handler := newTestMiddleware(t, cfg, mockGeoResult{
+		country: "US",
+		state:   "",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.RemoteAddr = "8.8.8.8:12345"
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for US without subdivision when blockUSStates=false, got %d", rr.Code)
+	}
+}
+
+func TestWhitelistedIPBypassesAllBlocking(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.BlockNonUS = true
+	cfg.BlockUSStates = true
+	cfg.WhitelistedIPs = []string{"8.8.8.8"}
+
+	handler := newTestMiddleware(t, cfg, mockGeoResult{
+		country: "GB",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.RemoteAddr = "8.8.8.8:12345"
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for whitelisted IP, got %d", rr.Code)
+	}
+}
+
+func TestWhitelistedPathBypassesAllBlocking(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.BlockNonUS = true
+	cfg.BlockUSStates = true
+	cfg.WhitelistedPaths = []string{"/healthz"}
+
+	handler := newTestMiddleware(t, cfg, mockGeoResult{
+		country: "GB",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/healthz", nil)
+	req.RemoteAddr = "8.8.8.8:12345"
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for whitelisted path, got %d", rr.Code)
+	}
+}
+
+func TestCfConnectingIPTakesPriorityOverXForwardedFor(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.BlockNonUS = true
+
+	handler := newTestMiddleware(t, cfg, mockGeoResult{
+		country: "GB",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Cf-Connecting-Ip", "8.8.8.8")
+	req.Header.Set("X-Forwarded-For", "1.1.1.1")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 because Cf-Connecting-Ip should be used first, got %d", rr.Code)
 	}
 }
