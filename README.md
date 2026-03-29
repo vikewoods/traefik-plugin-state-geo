@@ -46,12 +46,13 @@ services:
         - "traefik.http.middlewares.geo-block.plugin.stateblock.dbPath=/plugins-local/src/github.com/vikewoods/traefik-plugin-state-geo/data/GeoLite2-City.mmdb" # <- THIS is the important part
         - "traefik.http.middlewares.geo-block.plugin.stateblock.templatePath=/plugins-local/src/github.com/vikewoods/traefik-plugin-state-geo/data/blocked.html"
         - "traefik.http.middlewares.project-a-block.plugin.stateblock.templatePath=/templates/project-a.html" # <- This is the path to your custom template
+        - "traefik.http.middlewares.state-checker.plugin.stateblock.blockNonUS=true"
+        - "traefik.http.middlewares.state-checker.plugin.stateblock.blockUSStates=true"
         - "traefik.http.middlewares.geo-block.plugin.stateblock.blockedStates=CA,CT,DE,ID,LA,MI,MS,MT,NJ,NY,NV,WA"
         - "traefik.http.middlewares.geo-block.plugin.stateblock.whitelistedIPs=1.2.3.4,11.22.33.44"
         -  "traefik.http.middlewares.state-blocker.plugin.state-geo.whitelistedPaths[0]=/.well-known/"
         - "traefik.http.middlewares.state-blocker.plugin.state-geo.whitelistedPaths[1]=/health"
         - "traefik.http.middlewares.state-blocker.plugin.state-geo.whitelistedPaths[2]=/api/public/"
-        
         # Attach the middleware to the router
         - "traefik.http.routers.my-app.middlewares=geo-block"
 ```

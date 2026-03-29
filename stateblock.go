@@ -20,16 +20,21 @@ type Config struct {
 	TemplatePath     string   `json:"templatePath,omitempty"`
 	TemplateHTML     string   `json:"templateHTML,omitempty"`
 	FailOpen         bool     `json:"failOpen,omitempty"`
+	BlockNonUS       bool     `json:"blockNonUS,omitempty"`
+	BlockUSStates    bool     `json:"blockUSStates,omitempty"`
 }
 
 func CreateConfig() *Config {
 	return &Config{
-		BlockedStates:  []string{},
-		WhitelistedIPs: []string{},
-		DBPath:         "",
-		TemplatePath:   "",
-		TemplateHTML:   "",
-		FailOpen:       true,
+		BlockedStates:    []string{},
+		WhitelistedIPs:   []string{},
+		WhitelistedPaths: []string{},
+		DBPath:           "",
+		TemplatePath:     "",
+		TemplateHTML:     "",
+		FailOpen:         true,
+		BlockNonUS:       true,
+		BlockUSStates:    true,
 	}
 }
 
@@ -49,6 +54,11 @@ type StateBlock struct {
 	name             string
 	cache            map[string]cacheEntry
 	cacheMutex       sync.RWMutex
+	blockNonUS       bool
+	blockUSStates    bool
+
+	// test-only hook
+	mockGeoLookup func(net.IP) (countryCode string, subdivisionCode string, err error)
 }
 
 type geoRecord struct {
@@ -91,12 +101,12 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 
 	blockedMap := make(map[string]struct{})
 	for _, state := range config.BlockedStates {
-		blockedMap[strings.ToUpper(state)] = struct{}{}
+		blockedMap[strings.ToUpper(strings.TrimSpace(state))] = struct{}{}
 	}
 
 	whitelistMap := make(map[string]struct{})
 	for _, ip := range config.WhitelistedIPs {
-		whitelistMap[ip] = struct{}{}
+		whitelistMap[strings.TrimSpace(ip)] = struct{}{}
 	}
 
 	whitelistedPathsMap := make(map[string]struct{})
@@ -114,6 +124,9 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		next:             next,
 		name:             name,
 		cache:            make(map[string]cacheEntry),
+		blockNonUS:       config.BlockNonUS,
+		blockUSStates:    config.BlockUSStates,
+		mockGeoLookup:    nil,
 	}, nil
 }
 
@@ -141,6 +154,28 @@ func (a *StateBlock) serveBlocked(rw http.ResponseWriter, state string) {
 	_, _ = rw.Write([]byte(fmt.Sprintf("<h1>Access Denied</h1><p>State: %s</p>", state)))
 }
 
+func (a *StateBlock) resolveGeo(ip net.IP) (countryCode string, subdivisionCode string, err error) {
+	if a.mockGeoLookup != nil {
+		return a.mockGeoLookup(ip)
+	}
+
+	if a.db == nil {
+		return "", "", nil
+	}
+
+	var record geoRecord
+	if err := a.db.Lookup(ip, &record); err != nil {
+		return "", "", err
+	}
+
+	countryCode = strings.ToUpper(strings.TrimSpace(record.Country.IsoCode))
+	if len(record.Subdivisions) > 0 {
+		subdivisionCode = strings.ToUpper(strings.TrimSpace(record.Subdivisions[0].IsoCode))
+	}
+
+	return countryCode, subdivisionCode, nil
+}
+
 func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	// 0. Check paths whitelist first
 	if a.isPathWhitelisted(req.URL.Path) {
@@ -151,15 +186,15 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	ipStr := getRemoteIP(req)
 
-	// 1. Check Whitelist first (Static)
+	// 1. Check static IP whitelist
 	if _, ok := a.whitelistedIPs[ipStr]; ok {
 		fmt.Printf("[%s] DEBUG: IP %s is whitelisted, allowing\n", a.name, ipStr)
 		a.next.ServeHTTP(rw, req)
 		return
 	}
 
-	// 1.5 If DB is unavailable, fail-open pass-through
-	if a.db == nil {
+	// 1.5 Fail-open if no runtime DB and no mock
+	if a.db == nil && a.mockGeoLookup == nil {
 		a.next.ServeHTTP(rw, req)
 		return
 	}
@@ -180,28 +215,44 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// 3. Database Lookup
 	isAllowed := true
 	stateCode := ""
 
 	ip := net.ParseIP(ipStr)
 	if ip != nil {
-		var record geoRecord
-		err := a.db.Lookup(ip, &record)
+		if ip.IsPrivate() || ip.IsLoopback() {
+			fmt.Printf("[%s] DEBUG: Private/loopback IP %s detected, allowing\n", a.name, ipStr)
+			a.next.ServeHTTP(rw, req)
+			return
+		}
+
+		countryCode, subdivisionCode, err := a.resolveGeo(ip)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[%s] ERROR: GeoIP lookup failed for %s: %v\n", a.name, ipStr, err)
 		} else {
-			if record.Country.IsoCode != "US" {
-				isAllowed = false
-				stateCode = record.Country.IsoCode
-			} else if len(record.Subdivisions) > 0 {
-				stateCode = record.Subdivisions[0].IsoCode
-				if _, ok := a.blockedStates[stateCode]; ok {
+			fmt.Printf("[%s] DEBUG: Geo lookup for %s -> country=%s subdivision=%s\n", a.name, ipStr, countryCode, subdivisionCode)
+
+			if countryCode == "" {
+				fmt.Printf("[%s] WARN: No country resolved for %s, allowing (fail-open unresolved lookup)\n", a.name, ipStr)
+			} else if countryCode != "US" {
+				if a.blockNonUS {
 					isAllowed = false
+					stateCode = countryCode
 				}
 			} else {
-				isAllowed = false
-				stateCode = "Unknown"
+				if subdivisionCode != "" {
+					stateCode = subdivisionCode
+					if a.blockUSStates {
+						if _, ok := a.blockedStates[stateCode]; ok {
+							isAllowed = false
+						}
+					}
+				} else {
+					if a.blockUSStates {
+						isAllowed = false
+						stateCode = "Unknown"
+					}
+				}
 			}
 		}
 	}
@@ -223,22 +274,17 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 }
 
 func getRemoteIP(req *http.Request) string {
-	// Check CF-Connecting-Ip header first
 	if cf := req.Header.Get("Cf-Connecting-Ip"); cf != "" {
 		return strings.TrimSpace(cf)
 	}
 
-	// Check X-Forwarded-For if behind proxies
 	if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")
-		// Trim spaces
 		return strings.TrimSpace(parts[0])
 	}
 
-	// Fallback to RemoteAddr
 	res, _, err := net.SplitHostPort(req.RemoteAddr)
 	if err != nil {
-		// If SplitHostPort fails (e.g. no port), return raw RemoteAddr trimmed
 		return strings.TrimSpace(req.RemoteAddr)
 	}
 	return strings.TrimSpace(res)

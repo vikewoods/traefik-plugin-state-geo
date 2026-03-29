@@ -5,6 +5,8 @@ import: github.com/vikewoods/traefik-plugin-state-geo
 summary: Blocks all traffic outside of US and requests by US state using MaxMind GeoLite2 and supports custom block pages.
 
 testData:
+  blockNonUS: true
+  blockUSStates: true
   blockedStates:
     - CA
     - NY
