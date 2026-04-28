@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -46,7 +47,8 @@ type cacheEntry struct {
 type StateBlock struct {
 	next             http.Handler
 	blockedStates    map[string]struct{}
-	whitelistedIPs   map[string]struct{}
+	whitelistedIPs   map[netip.Addr]struct{}
+	whitelistedCIDRs []netip.Prefix
 	whitelistedPaths map[string]struct{}
 	db               *maxminddb.Reader
 	templatePath     string
@@ -104,10 +106,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		blockedMap[strings.ToUpper(strings.TrimSpace(state))] = struct{}{}
 	}
 
-	whitelistMap := make(map[string]struct{})
-	for _, ip := range config.WhitelistedIPs {
-		whitelistMap[strings.TrimSpace(ip)] = struct{}{}
-	}
+	whitelistMap, whitelistedCIDRs := parseWhitelistedIPRules(config.WhitelistedIPs, name)
 
 	whitelistedPathsMap := make(map[string]struct{})
 	for _, path := range config.WhitelistedPaths {
@@ -117,6 +116,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	return &StateBlock{
 		blockedStates:    blockedMap,
 		whitelistedIPs:   whitelistMap,
+		whitelistedCIDRs: whitelistedCIDRs,
 		whitelistedPaths: whitelistedPathsMap,
 		db:               db,
 		templatePath:     config.TemplatePath,
@@ -130,12 +130,63 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	}, nil
 }
 
+func parseWhitelistedIPRules(entries []string, name string) (map[netip.Addr]struct{}, []netip.Prefix) {
+	exactIPs := make(map[netip.Addr]struct{})
+	var cidrs []netip.Prefix
+
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		if strings.Contains(entry, "/") {
+			prefix, err := netip.ParsePrefix(entry)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[%s] WARN: invalid whitelistedIPs CIDR entry %q skipped: %v\n", name, entry, err)
+				continue
+			}
+			cidrs = append(cidrs, prefix.Masked())
+			continue
+		}
+
+		ip, err := netip.ParseAddr(entry)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[%s] WARN: invalid whitelistedIPs IP entry %q skipped: %v\n", name, entry, err)
+			continue
+		}
+		exactIPs[ip.Unmap()] = struct{}{}
+	}
+
+	return exactIPs, cidrs
+}
+
 func (a *StateBlock) isPathWhitelisted(reqPath string) bool {
 	for whitelistedPath := range a.whitelistedPaths {
 		if strings.HasPrefix(reqPath, whitelistedPath) {
 			return true
 		}
 	}
+	return false
+}
+
+func (a *StateBlock) isIPWhitelisted(ipStr string) bool {
+	ip, err := netip.ParseAddr(strings.TrimSpace(ipStr))
+	if err != nil {
+		return false
+	}
+
+	ip = ip.Unmap()
+	if _, ok := a.whitelistedIPs[ip]; ok {
+		return true
+	}
+
+	for _, cidr := range a.whitelistedCIDRs {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -186,8 +237,8 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	ipStr := getRemoteIP(req)
 
-	// 1. Check static IP whitelist
-	if _, ok := a.whitelistedIPs[ipStr]; ok {
+	// 1. Check static IP/CIDR whitelist
+	if a.isIPWhitelisted(ipStr) {
 		fmt.Printf("[%s] DEBUG: IP %s is whitelisted, allowing\n", a.name, ipStr)
 		a.next.ServeHTTP(rw, req)
 		return

@@ -2,6 +2,7 @@ package traefik_plugin_state_geo
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -45,6 +46,29 @@ func newTestMiddleware(t *testing.T, cfg *Config, geo mockGeoResult) *StateBlock
 	}
 
 	return sb
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+
+	original := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create stderr pipe: %v", err)
+	}
+
+	os.Stderr = w
+	fn()
+	_ = w.Close()
+	os.Stderr = original
+
+	output, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("failed to read stderr output: %v", err)
+	}
+	_ = r.Close()
+
+	return string(output)
 }
 
 func TestStateBlock(t *testing.T) {
@@ -602,6 +626,143 @@ func TestWhitelistedIPBypassesAllBlocking(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200 for whitelisted IP, got %d", rr.Code)
+	}
+}
+
+func TestWhitelistedIPRulesBypassBlocking(t *testing.T) {
+	tests := []struct {
+		name           string
+		whitelistedIPs []string
+		remoteAddr     string
+		headers        map[string]string
+		expectedCode   int
+	}{
+		{
+			name:           "exact IP",
+			whitelistedIPs: []string{"8.8.8.8"},
+			remoteAddr:     "8.8.8.8:12345",
+			expectedCode:   http.StatusOK,
+		},
+		{
+			name:           "IPv4 CIDR contains remote address",
+			whitelistedIPs: []string{"203.0.113.0/24"},
+			remoteAddr:     "203.0.113.42:12345",
+			expectedCode:   http.StatusOK,
+		},
+		{
+			name:           "IPv4 CIDR does not contain remote address",
+			whitelistedIPs: []string{"203.0.113.0/24"},
+			remoteAddr:     "198.51.100.42:12345",
+			expectedCode:   http.StatusForbidden,
+		},
+		{
+			name:           "IPv6 CIDR contains remote address",
+			whitelistedIPs: []string{"2001:db8:abcd::/48"},
+			remoteAddr:     "[2001:db8:abcd::1234]:12345",
+			expectedCode:   http.StatusOK,
+		},
+		{
+			name:           "Cloudflare connecting IP matches CIDR",
+			whitelistedIPs: []string{"198.51.100.0/24"},
+			remoteAddr:     "127.0.0.1:12345",
+			headers: map[string]string{
+				"Cf-Connecting-Ip": "198.51.100.24",
+				"X-Forwarded-For":  "8.8.8.8",
+			},
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:           "X-Forwarded-For first IP matches CIDR",
+			whitelistedIPs: []string{"198.51.100.0/24"},
+			remoteAddr:     "127.0.0.1:12345",
+			headers: map[string]string{
+				"X-Forwarded-For": "198.51.100.24, 8.8.8.8",
+			},
+			expectedCode: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := CreateConfig()
+			cfg.BlockNonUS = true
+			cfg.BlockUSStates = true
+			cfg.WhitelistedIPs = tt.whitelistedIPs
+
+			handler := newTestMiddleware(t, cfg, mockGeoResult{
+				country: "GB",
+			})
+
+			req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+			req.RemoteAddr = tt.remoteAddr
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != tt.expectedCode {
+				t.Fatalf("expected status %d, got %d", tt.expectedCode, rr.Code)
+			}
+		})
+	}
+}
+
+func TestInvalidWhitelistedIPRulesWarnAndAreSkipped(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.BlockNonUS = true
+	cfg.BlockUSStates = true
+	cfg.WhitelistedIPs = []string{
+		"not-an-ip",
+		"203.0.113.0/99",
+		"",
+		"   ",
+		"198.51.100.0/24",
+	}
+
+	var handler *StateBlock
+	stderr := captureStderr(t, func() {
+		handler = newTestMiddleware(t, cfg, mockGeoResult{
+			country: "GB",
+		})
+	})
+
+	for _, invalid := range []string{"not-an-ip", "203.0.113.0/99"} {
+		if !strings.Contains(stderr, invalid) {
+			t.Fatalf("expected stderr warning to mention invalid whitelist entry %q, got %q", invalid, stderr)
+		}
+	}
+
+	tests := []struct {
+		name         string
+		remoteAddr   string
+		expectedCode int
+	}{
+		{
+			name:         "invalid exact IP does not whitelist request",
+			remoteAddr:   "8.8.8.8:12345",
+			expectedCode: http.StatusForbidden,
+		},
+		{
+			name:         "valid CIDR still works after invalid entries",
+			remoteAddr:   "198.51.100.24:12345",
+			expectedCode: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+			req.RemoteAddr = tt.remoteAddr
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != tt.expectedCode {
+				t.Fatalf("expected status %d, got %d", tt.expectedCode, rr.Code)
+			}
+		})
 	}
 }
 
