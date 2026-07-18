@@ -8,6 +8,7 @@ pages.
 
 [![CI](https://github.com/vikewoods/traefik-plugin-state-geo/actions/workflows/ci.yml/badge.svg)](https://github.com/vikewoods/traefik-plugin-state-geo/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/vikewoods/traefik-plugin-state-geo/actions/workflows/codeql.yml/badge.svg)](https://github.com/vikewoods/traefik-plugin-state-geo/actions/workflows/codeql.yml)
+[![License](https://img.shields.io/github/license/vikewoods/traefik-plugin-state-geo)](LICENSE)
 
 ## What it does
 
@@ -169,3 +170,9 @@ gosec -quiet ./...
 The smoke test loads the source through Traefik v3.7.1's interpreted local
 plugin runtime and verifies real IPv4/IPv6 decisions. See
 [Contributing](CONTRIBUTING.md) and the [release checklist](docs/release.md).
+
+## License
+
+State Geo Block is licensed under the [Apache License 2.0](LICENSE).
+Third-party fixture and dependency licenses are documented in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

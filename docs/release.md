@@ -5,8 +5,8 @@ version. Do not publish or deploy a tag until every required item below passes.
 
 ## Repository and legal
 
-- [ ] The owner has selected and added a project license. Third-party fixture
-      and vendored dependency licenses are already preserved.
+- [x] The project uses Apache License 2.0. Third-party fixture and vendored
+      dependency licenses are preserved independently.
 - [ ] `CHANGELOG.md` moves Unreleased changes under the final version/date.
 - [ ] README and examples reference the final immutable tag where appropriate.
 - [ ] No production MMDB, credentials, logs, or cluster secrets are present in
@@ -24,7 +24,8 @@ version. Do not publish or deploy a tag until every required item below passes.
 - [ ] Dependencies are committed under `vendor/`.
 - [ ] The package exports `Config`, `CreateConfig`, and `New` with the required
       Traefik signatures.
-- [ ] The release tag uses semantic `vMAJOR.MINOR.PATCH` form.
+- [ ] The release tag uses semantic `vMAJOR.MINOR.PATCH` or
+      `vMAJOR.MINOR.PATCH-PRERELEASE` form.
 
 ## Verification
 

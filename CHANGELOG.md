@@ -18,6 +18,7 @@ Versioning for released tags.
 
 ### Added
 
+- Apache License 2.0 for the project, with preserved third-party notices.
 - Ordered `clientIPHeaders` with Cloudflare, True Client IP, XFF, RFC
   `Forwarded`, X-Real-IP, custom header, IPv4, and IPv6 support.
 - Explicit database, lookup, invalid-IP, unknown-country,

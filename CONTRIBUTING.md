@@ -44,6 +44,8 @@ shim shape.
 
 ## Pull requests
 
+- Unless explicitly stated otherwise, submitted contributions are licensed
+  under the project's [Apache License 2.0](LICENSE).
 - Keep changes scoped and document behavior changes in `CHANGELOG.md`.
 - Update README/configuration examples whenever fields or defaults change.
 - Preserve the module path and `.traefik.yml` import consistency.
