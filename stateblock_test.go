@@ -2,14 +2,14 @@ package traefik_plugin_state_geo
 
 import (
 	"context"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
+
+const testDatabasePath = "testdata/GeoIP2-City-Test.mmdb"
 
 type mockGeoResult struct {
 	country   string
@@ -17,28 +17,29 @@ type mockGeoResult struct {
 	lookupErr error
 }
 
-func newTestMiddleware(t *testing.T, cfg *Config, geo mockGeoResult) *StateBlock {
+func newTestMiddleware(t *testing.T, cfg *Config, geo mockGeoResult) *stateBlock {
 	t.Helper()
 
-	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 		_, _ = rw.Write([]byte("OK"))
 	})
 
 	cfg.DBPath = ""
 	cfg.FailOpen = true
+	cfg.LogLevel = "off"
 
 	handler, err := New(context.Background(), next, cfg, "test-plugin")
 	if err != nil {
 		t.Fatalf("expected no error creating middleware, got %v", err)
 	}
 
-	sb, ok := handler.(*StateBlock)
+	sb, ok := handler.(*stateBlock)
 	if !ok {
-		t.Fatalf("expected handler to be *StateBlock")
+		t.Fatalf("expected handler to be *stateBlock")
 	}
 
-	sb.mockGeoLookup = func(ip net.IP) (string, string, error) {
+	sb.mockGeoLookup = func(_ net.IP) (string, string, error) {
 		if geo.lookupErr != nil {
 			return "", "", geo.lookupErr
 		}
@@ -48,51 +49,15 @@ func newTestMiddleware(t *testing.T, cfg *Config, geo mockGeoResult) *StateBlock
 	return sb
 }
 
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-
-	original := os.Stderr
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("failed to create stderr pipe: %v", err)
-	}
-
-	os.Stderr = w
-	fn()
-	_ = w.Close()
-	os.Stderr = original
-
-	output, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("failed to read stderr output: %v", err)
-	}
-	_ = r.Close()
-
-	return string(output)
-}
-
 func TestStateBlock(t *testing.T) {
-	dbPath := "data/GeoLite2-City.mmdb"
-	templatePath := "data/blocked.html"
-
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		t.Skip("GeoLite2-City.mmdb not found in data/ folder, skipping test")
-	}
-
-	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
-		_ = os.MkdirAll("data", 0755)
-		dummyHTML := "<html><body>Access Denied for {{STATE}}</body></html>"
-		_ = os.WriteFile(templatePath, []byte(dummyHTML), 0644)
-	}
-
 	cfg := CreateConfig()
 	cfg.BlockedStates = []string{"CA"}
-	cfg.WhitelistedIPs = []string{"1.2.3.4", "140.228.62.31"}
-	cfg.DBPath = dbPath
-	cfg.TemplatePath = templatePath
+	cfg.WhitelistedIPs = []string{"1.2.3.4", "81.2.69.160"}
+	cfg.DBPath = testDatabasePath
+	cfg.TemplateHTML = "<html><body>Access Denied for {{STATE}}</body></html>"
 
 	ctx := context.Background()
-	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 	})
 
@@ -108,26 +73,38 @@ func TestStateBlock(t *testing.T) {
 		expectContent string
 	}{
 		{
-			name:         "Allowed US State (NY)",
-			remoteAddr:   "161.185.160.93:1234", // NYC IP
+			name:         "Allowed US State (WA)",
+			remoteAddr:   "216.160.83.56:1234",
 			expectedCode: http.StatusOK,
 		},
 		{
 			name:          "Blocked US State (CA)",
-			remoteAddr:    "76.79.129.110:1234", // San Francisco, CA
+			remoteAddr:    "214.78.120.1:1234",
 			expectedCode:  http.StatusForbidden,
 			expectContent: "CA",
 		},
 		{
 			name:         "Whitelisted IP (GB)",
-			remoteAddr:   "140.228.62.31:1234", // GB IP
+			remoteAddr:   "81.2.69.160:1234",
 			expectedCode: http.StatusOK,
 		},
 		{
-			name:          "Blocked IP (GB)",
-			remoteAddr:    "140.228.62.32:1234", // GB IP
+			name:          "Blocked IP (SE)",
+			remoteAddr:    "89.160.20.128:1234",
 			expectedCode:  http.StatusForbidden,
-			expectContent: "GB",
+			expectContent: "SE",
+		},
+		{
+			name:          "Blocked IPv6 (JP)",
+			remoteAddr:    "[2001:218::1]:1234",
+			expectedCode:  http.StatusForbidden,
+			expectContent: "JP",
+		},
+		{
+			name:          "Blocked US Unknown Subdivision",
+			remoteAddr:    "149.101.100.1:1234",
+			expectedCode:  http.StatusForbidden,
+			expectContent: "Unknown",
 		},
 		{
 			name:         "Whitelisted IP (Regardless of Location)",
@@ -163,21 +140,117 @@ func TestStateBlock(t *testing.T) {
 	}
 }
 
-// NEW: Test specifically for whitelisted paths
-func TestPathWhitelist(t *testing.T) {
-	dbPath := "data/GeoLite2-City.mmdb"
-
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		t.Skip("GeoLite2-City.mmdb not found in data/ folder, skipping test")
+func TestStateBlockClientIPSourcesWithFixture(t *testing.T) {
+	tests := []struct {
+		name         string
+		remoteAddr   string
+		headers      map[string]string
+		expectedCode int
+	}{
+		{
+			name:         "direct IPv4",
+			remoteAddr:   "214.78.120.1:443",
+			expectedCode: http.StatusForbidden,
+		},
+		{
+			name:       "Cloudflare header",
+			remoteAddr: "10.17.1.10:443",
+			headers: map[string]string{
+				"CF-Connecting-IP": "214.78.120.1",
+			},
+			expectedCode: http.StatusForbidden,
+		},
+		{
+			name:       "True-Client-IP fallback",
+			remoteAddr: "10.17.1.10:443",
+			headers: map[string]string{
+				"True-Client-IP": "216.160.83.56",
+			},
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:       "X-Real-IP fallback",
+			remoteAddr: "10.17.1.10:443",
+			headers: map[string]string{
+				"X-Real-IP": "214.78.120.1",
+			},
+			expectedCode: http.StatusForbidden,
+		},
+		{
+			name:       "X-Forwarded-For chain",
+			remoteAddr: "10.17.1.10:443",
+			headers: map[string]string{
+				"X-Forwarded-For": "216.160.83.56, 10.17.1.20",
+			},
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:       "RFC Forwarded IPv6",
+			remoteAddr: "10.17.1.10:443",
+			headers: map[string]string{
+				"Forwarded": `for="[2001:218::1]:443";proto=https`,
+			},
+			expectedCode: http.StatusForbidden,
+		},
+		{
+			name:       "malformed preferred header falls back",
+			remoteAddr: "10.17.1.10:443",
+			headers: map[string]string{
+				"CF-Connecting-IP": "not-an-ip",
+				"X-Real-IP":        "216.160.83.56",
+			},
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:       "untrusted peer cannot spoof headers",
+			remoteAddr: "216.160.83.56:443",
+			headers: map[string]string{
+				"CF-Connecting-IP": "214.78.120.1",
+			},
+			expectedCode: http.StatusOK,
+		},
 	}
 
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := CreateConfig()
+			cfg.BlockedStates = []string{"CA"}
+			cfg.TrustedProxyCIDRs = []string{"10.17.1.0/24"}
+			cfg.DBPath = testDatabasePath
+			cfg.LogLevel = "off"
+
+			next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+				rw.WriteHeader(http.StatusOK)
+			})
+			handler, err := New(context.Background(), next, cfg, "client-ip-fixture-test")
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+			req.RemoteAddr = test.remoteAddr
+			for name, value := range test.headers {
+				req.Header.Set(name, value)
+			}
+
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, req)
+			if response.Code != test.expectedCode {
+				t.Fatalf("status = %d, want %d", response.Code, test.expectedCode)
+			}
+		})
+	}
+}
+
+func TestPathWhitelist(t *testing.T) {
 	cfg := CreateConfig()
 	cfg.BlockedStates = []string{"CA"}
-	cfg.WhitelistedPaths = []string{"/.well-known/", "/health", "/api/public/"}
-	cfg.DBPath = dbPath
+	cfg.WhitelistedPaths = []string{"/health"}
+	cfg.WhitelistedPathPrefixes = []string{"/.well-known", "/api/public"}
+	cfg.DBPath = testDatabasePath
 
 	ctx := context.Background()
-	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 		_, _ = rw.Write([]byte("Success"))
 	})
@@ -197,51 +270,72 @@ func TestPathWhitelist(t *testing.T) {
 		{
 			name:         "Well-Known ACME Challenge",
 			path:         "/.well-known/acme-challenge/token123",
-			remoteAddr:   "76.79.129.110:1234", // CA IP that would normally be blocked
+			remoteAddr:   "214.78.120.1:1234",
 			expectedCode: http.StatusOK,
 			description:  "Should allow .well-known even from blocked state",
 		},
 		{
 			name:         "Well-Known Root",
 			path:         "/.well-known/",
-			remoteAddr:   "140.228.62.32:1234", // GB IP that would normally be blocked
+			remoteAddr:   "89.160.20.128:1234",
 			expectedCode: http.StatusOK,
 			description:  "Should allow .well-known root from blocked country",
 		},
 		{
 			name:         "Health Check Endpoint",
 			path:         "/health",
-			remoteAddr:   "76.79.129.110:1234", // CA IP
+			remoteAddr:   "214.78.120.1:1234",
 			expectedCode: http.StatusOK,
 			description:  "Should allow health check from blocked state",
 		},
 		{
 			name:         "Public API Endpoint",
 			path:         "/api/public/status",
-			remoteAddr:   "76.79.129.110:1234", // CA IP
+			remoteAddr:   "214.78.120.1:1234",
 			expectedCode: http.StatusOK,
 			description:  "Should allow public API from blocked state",
 		},
 		{
 			name:         "Non-Whitelisted Path Blocked",
 			path:         "/admin",
-			remoteAddr:   "76.79.129.110:1234", // CA IP
+			remoteAddr:   "214.78.120.1:1234",
 			expectedCode: http.StatusForbidden,
 			description:  "Should block non-whitelisted path from blocked state",
 		},
 		{
 			name:         "Root Path Blocked",
 			path:         "/",
-			remoteAddr:   "76.79.129.110:1234", // CA IP
+			remoteAddr:   "214.78.120.1:1234",
 			expectedCode: http.StatusForbidden,
 			description:  "Should block root path from blocked state",
 		},
 		{
 			name:         "Similar But Not Matching Path",
 			path:         "/api/private/data",
-			remoteAddr:   "76.79.129.110:1234", // CA IP
+			remoteAddr:   "214.78.120.1:1234",
 			expectedCode: http.StatusForbidden,
 			description:  "Should block similar but non-matching path",
+		},
+		{
+			name:         "Exact Health Path Does Not Match Suffix",
+			path:         "/healthz",
+			remoteAddr:   "214.78.120.1:1234",
+			expectedCode: http.StatusForbidden,
+			description:  "Should not treat an exact path rule as a raw prefix",
+		},
+		{
+			name:         "Public Prefix Is Segment Safe",
+			path:         "/api/publicity",
+			remoteAddr:   "214.78.120.1:1234",
+			expectedCode: http.StatusForbidden,
+			description:  "Should not match a similar path segment",
+		},
+		{
+			name:         "Traversal Cannot Retain Whitelisted Prefix",
+			path:         "/.well-known/../admin",
+			remoteAddr:   "214.78.120.1:1234",
+			expectedCode: http.StatusForbidden,
+			description:  "Should normalize the request path before matching",
 		},
 	}
 
@@ -268,22 +362,15 @@ func TestPathWhitelist(t *testing.T) {
 	}
 }
 
-// NEW: Test path whitelist priority (should bypass geo-lookup entirely)
 func TestPathWhitelistBypassesGeoLookup(t *testing.T) {
-	dbPath := "data/GeoLite2-City.mmdb"
-
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		t.Skip("GeoLite2-City.mmdb not found in data/ folder, skipping test")
-	}
-
 	cfg := CreateConfig()
 	cfg.BlockedStates = []string{"CA", "NY", "TX"} // Block multiple states
-	cfg.WhitelistedPaths = []string{"/.well-known/"}
-	cfg.DBPath = dbPath
+	cfg.WhitelistedPathPrefixes = []string{"/.well-known"}
+	cfg.DBPath = testDatabasePath
 
 	ctx := context.Background()
 	callCount := 0
-	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		callCount++
 		rw.WriteHeader(http.StatusOK)
 	})
@@ -295,7 +382,7 @@ func TestPathWhitelistBypassesGeoLookup(t *testing.T) {
 
 	// Make request to whitelisted path with blocked CA IP
 	req, _ := http.NewRequest(http.MethodGet, "http://localhost/.well-known/acme-challenge/test", nil)
-	req.RemoteAddr = "76.79.129.110:1234" // CA IP
+	req.RemoteAddr = "214.78.120.1:1234"
 
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
@@ -309,21 +396,14 @@ func TestPathWhitelistBypassesGeoLookup(t *testing.T) {
 	}
 }
 
-// NEW: Test X-Forwarded-For header with whitelisted paths
 func TestPathWhitelistWithProxyHeaders(t *testing.T) {
-	dbPath := "data/GeoLite2-City.mmdb"
-
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		t.Skip("GeoLite2-City.mmdb not found in data/ folder, skipping test")
-	}
-
 	cfg := CreateConfig()
 	cfg.BlockedStates = []string{"CA"}
-	cfg.WhitelistedPaths = []string{"/.well-known/"}
-	cfg.DBPath = dbPath
+	cfg.WhitelistedPathPrefixes = []string{"/.well-known"}
+	cfg.DBPath = testDatabasePath
 
 	ctx := context.Background()
-	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 	})
 
@@ -335,7 +415,7 @@ func TestPathWhitelistWithProxyHeaders(t *testing.T) {
 	// Test with X-Forwarded-For header
 	req, _ := http.NewRequest(http.MethodGet, "http://localhost/.well-known/acme-challenge/test", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-Forwarded-For", "76.79.129.110") // CA IP in header
+	req.Header.Set("X-Forwarded-For", "214.78.120.1")
 
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
@@ -351,7 +431,7 @@ func TestNoDBPathFailOpenPassThrough(t *testing.T) {
 	cfg.FailOpen = true
 
 	ctx := context.Background()
-	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 		_, _ = rw.Write([]byte("pass"))
 	})
@@ -381,7 +461,7 @@ func TestMissingDBFileFailOpenPassThrough(t *testing.T) {
 	cfg.FailOpen = true
 
 	ctx := context.Background()
-	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 		_, _ = rw.Write([]byte("pass"))
 	})
@@ -411,7 +491,7 @@ func TestMissingDBFileFailClosedReturnsError(t *testing.T) {
 	cfg.FailOpen = false
 
 	ctx := context.Background()
-	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 	})
 
@@ -422,36 +502,29 @@ func TestMissingDBFileFailClosedReturnsError(t *testing.T) {
 }
 
 func TestTemplateHTMLUsedForBlockedResponse(t *testing.T) {
-	tmpDir := t.TempDir()
-	templatePath := tmpDir + "/template.html"
-	fileTemplate := "<html><body>FILE TEMPLATE {{STATE}}</body></html>"
-	if err := os.WriteFile(templatePath, []byte(fileTemplate), 0644); err != nil {
-		t.Fatalf("failed to write temp template file: %v", err)
-	}
-
 	cfg := CreateConfig()
 	cfg.DBPath = ""
 	cfg.FailOpen = true
-	cfg.TemplatePath = templatePath
 	cfg.TemplateHTML = "<html><body>INLINE TEMPLATE {{STATE}}</body></html>"
 
 	ctx := context.Background()
-	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 	})
 
-	handler, err := New(ctx, next, cfg, "template-html-priority-test")
+	handler, err := New(ctx, next, cfg, "template-html-test")
 	if err != nil {
 		t.Fatalf("expected middleware initialization to succeed, got error: %v", err)
 	}
 
-	stateBlock, ok := handler.(*StateBlock)
+	stateBlock, ok := handler.(*stateBlock)
 	if !ok {
-		t.Fatalf("expected handler type *StateBlock, got %T", handler)
+		t.Fatalf("expected handler type *stateBlock, got %T", handler)
 	}
 
 	recorder := httptest.NewRecorder()
-	stateBlock.serveBlocked(recorder, "CA")
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	stateBlock.serveBlocked(recorder, req, "CA", "")
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected status %d, got %d", http.StatusForbidden, recorder.Code)
@@ -465,9 +538,6 @@ func TestTemplateHTMLUsedForBlockedResponse(t *testing.T) {
 	body := recorder.Body.String()
 	if !strings.Contains(body, "INLINE TEMPLATE CA") {
 		t.Fatalf("expected inline template to be used, body: %s", body)
-	}
-	if strings.Contains(body, "FILE TEMPLATE") {
-		t.Fatalf("did not expect templatePath content when templateHTML is set, body: %s", body)
 	}
 	if strings.Contains(body, "Access Denied") {
 		t.Fatalf("did not expect built-in fallback when templateHTML is set, body: %s", body)
@@ -483,6 +553,25 @@ func TestCreateConfigDefaults(t *testing.T) {
 
 	if !cfg.BlockUSStates {
 		t.Fatalf("expected BlockUSStates default to be true")
+	}
+
+	expectedHeaders := []string{
+		"CF-Connecting-IP",
+		"True-Client-IP",
+		"X-Forwarded-For",
+		"Forwarded",
+		"X-Real-IP",
+	}
+	if len(cfg.ClientIPHeaders) != len(expectedHeaders) {
+		t.Fatalf("expected %d default client IP headers, got %d", len(expectedHeaders), len(cfg.ClientIPHeaders))
+	}
+	for index, expected := range expectedHeaders {
+		if cfg.ClientIPHeaders[index] != expected {
+			t.Fatalf("client IP header %d = %q, want %q", index, cfg.ClientIPHeaders[index], expected)
+		}
+	}
+	if len(cfg.TrustedProxyCIDRs) != 0 {
+		t.Fatalf("expected no trusted proxy CIDRs by default, got %v", cfg.TrustedProxyCIDRs)
 	}
 }
 
@@ -672,11 +761,11 @@ func TestWhitelistedIPRulesBypassBlocking(t *testing.T) {
 			expectedCode: http.StatusOK,
 		},
 		{
-			name:           "X-Forwarded-For first IP matches CIDR",
+			name:           "X-Forwarded-For client before trusted proxy matches CIDR",
 			whitelistedIPs: []string{"198.51.100.0/24"},
 			remoteAddr:     "127.0.0.1:12345",
 			headers: map[string]string{
-				"X-Forwarded-For": "198.51.100.24, 8.8.8.8",
+				"X-Forwarded-For": "198.51.100.24, 127.0.0.2",
 			},
 			expectedCode: http.StatusOK,
 		},
@@ -688,6 +777,9 @@ func TestWhitelistedIPRulesBypassBlocking(t *testing.T) {
 			cfg.BlockNonUS = true
 			cfg.BlockUSStates = true
 			cfg.WhitelistedIPs = tt.whitelistedIPs
+			if len(tt.headers) > 0 {
+				cfg.TrustedProxyCIDRs = []string{"127.0.0.0/8"}
+			}
 
 			handler := newTestMiddleware(t, cfg, mockGeoResult{
 				country: "GB",
@@ -709,58 +801,27 @@ func TestWhitelistedIPRulesBypassBlocking(t *testing.T) {
 	}
 }
 
-func TestInvalidWhitelistedIPRulesWarnAndAreSkipped(t *testing.T) {
-	cfg := CreateConfig()
-	cfg.BlockNonUS = true
-	cfg.BlockUSStates = true
-	cfg.WhitelistedIPs = []string{
-		"not-an-ip",
-		"203.0.113.0/99",
-		"",
-		"   ",
-		"198.51.100.0/24",
-	}
-
-	var handler *StateBlock
-	stderr := captureStderr(t, func() {
-		handler = newTestMiddleware(t, cfg, mockGeoResult{
-			country: "GB",
-		})
-	})
-
-	for _, invalid := range []string{"not-an-ip", "203.0.113.0/99"} {
-		if !strings.Contains(stderr, invalid) {
-			t.Fatalf("expected stderr warning to mention invalid whitelist entry %q, got %q", invalid, stderr)
-		}
-	}
-
+func TestInvalidWhitelistedIPRulesAreRejected(t *testing.T) {
 	tests := []struct {
-		name         string
-		remoteAddr   string
-		expectedCode int
+		name  string
+		entry string
 	}{
-		{
-			name:         "invalid exact IP does not whitelist request",
-			remoteAddr:   "8.8.8.8:12345",
-			expectedCode: http.StatusForbidden,
-		},
-		{
-			name:         "valid CIDR still works after invalid entries",
-			remoteAddr:   "198.51.100.24:12345",
-			expectedCode: http.StatusOK,
-		},
+		{name: "invalid ip", entry: "not-an-ip"},
+		{name: "invalid cidr", entry: "203.0.113.0/99"},
+		{name: "empty entry", entry: ""},
+		{name: "whitespace entry", entry: "   "},
+		{name: "scoped ipv6", entry: "fe80::1%eth0"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
-			req.RemoteAddr = tt.remoteAddr
-			rr := httptest.NewRecorder()
-
-			handler.ServeHTTP(rr, req)
-
-			if rr.Code != tt.expectedCode {
-				t.Fatalf("expected status %d, got %d", tt.expectedCode, rr.Code)
+	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+	})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := CreateConfig()
+			config.WhitelistedIPs = []string{test.entry}
+			if _, err := New(context.Background(), next, config, "invalid-ip-whitelist-test"); err == nil {
+				t.Fatal("New() error = nil, want invalid whitelist error")
 			}
 		})
 	}
@@ -790,6 +851,7 @@ func TestWhitelistedPathBypassesAllBlocking(t *testing.T) {
 func TestCfConnectingIPTakesPriorityOverXForwardedFor(t *testing.T) {
 	cfg := CreateConfig()
 	cfg.BlockNonUS = true
+	cfg.TrustedProxyCIDRs = []string{"127.0.0.0/8"}
 
 	handler := newTestMiddleware(t, cfg, mockGeoResult{
 		country: "GB",
@@ -805,5 +867,35 @@ func TestCfConnectingIPTakesPriorityOverXForwardedFor(t *testing.T) {
 
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 because Cf-Connecting-Ip should be used first, got %d", rr.Code)
+	}
+}
+
+func TestMiddlewareUsesResolvedIPv6ClientIPForGeoLookup(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.TrustedProxyCIDRs = []string{"127.0.0.0/8"}
+
+	handler := newTestMiddleware(t, cfg, mockGeoResult{
+		country: "US",
+		state:   "NY",
+	})
+
+	var lookedUpIP string
+	handler.mockGeoLookup = func(ip net.IP) (string, string, error) {
+		lookedUpIP = ip.String()
+		return "US", "NY", nil
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("CF-Connecting-IP", "2606:4700:4700::1111")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	if lookedUpIP != "2606:4700:4700::1111" {
+		t.Fatalf("GeoIP lookup address = %q, want %q", lookedUpIP, "2606:4700:4700::1111")
 	}
 }

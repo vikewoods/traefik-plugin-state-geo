@@ -1,0 +1,37 @@
+http:
+  routers:
+    smoke:
+      entryPoints:
+        - web
+      rule: PathPrefix(`/`)
+      middlewares:
+        - state-geo
+      service: backend
+  middlewares:
+    state-geo:
+      plugin:
+        stateGeoBlock:
+          blockedStates:
+            - CA
+          clientIPHeaders:
+            - CF-Connecting-IP
+            - True-Client-IP
+            - X-Forwarded-For
+            - Forwarded
+            - X-Real-IP
+          trustedProxyCIDRs:
+            - 0.0.0.0/0
+            - ::/0
+          dbPath: /plugins-local/src/github.com/vikewoods/traefik-plugin-state-geo/testdata/GeoIP2-City-Test.mmdb
+          databaseFailurePolicy: error
+          lookupFailurePolicy: deny
+          invalidClientIPPolicy: deny
+          unknownCountryPolicy: deny
+          unknownSubdivisionPolicy: deny
+          privateIPPolicy: deny
+          logLevel: debug
+  services:
+    backend:
+      loadBalancer:
+        servers:
+          - url: http://state-geo-whoami:80

@@ -1,0 +1,17 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: app
+  namespace: default
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`app.example.com`)
+      middlewares:
+        - name: state-geo-block
+          namespace: traefik-system
+      services:
+        - name: app
+          port: 80

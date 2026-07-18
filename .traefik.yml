@@ -1,25 +1,45 @@
 displayName: State Geo Block Middleware
 type: middleware
 import: github.com/vikewoods/traefik-plugin-state-geo
+runtime: yaegi
 
-summary: Blocks all traffic outside of US and requests by US state using MaxMind GeoLite2 and supports custom block pages.
+summary: Blocks non-US traffic and selected US states using a mounted MaxMind City database.
 
 testData:
+  dbPath: testdata/GeoIP2-City-Test.mmdb
+  databaseReloadInterval: 1m
+  cacheSize: 100
+  cacheTTL: 5m
   blockNonUS: true
   blockUSStates: true
   blockedStates:
     - CA
-    - NY
+  clientIPHeaders:
+    - CF-Connecting-IP
+    - True-Client-IP
+    - X-Forwarded-For
+    - Forwarded
+    - X-Real-IP
+  trustedProxyCIDRs:
+    - 127.0.0.0/8
   whitelistedIPs:
-    - 1.2.3.4
+    - 192.0.2.10
   whitelistedPaths:
     - /health
+  whitelistedPathPrefixes:
+    - /.well-known
+  databaseFailurePolicy: error
+  lookupFailurePolicy: deny
+  invalidClientIPPolicy: deny
+  unknownCountryPolicy: deny
+  unknownSubdivisionPolicy: deny
+  privateIPPolicy: deny
+  logLevel: "off"
   templateHTML: |
     <!doctype html>
-    <html>
+    <html lang="en">
       <body>
         <h1>Access denied</h1>
         <p>State: {{STATE}}</p>
       </body>
     </html>
-  failOpen: true

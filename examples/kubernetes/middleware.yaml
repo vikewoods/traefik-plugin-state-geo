@@ -1,0 +1,37 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: state-geo-block
+  namespace: traefik-system
+spec:
+  plugin:
+    stateGeoBlock:
+      dbPath: /data/geolite/GeoLite2-City.mmdb
+      databaseReloadInterval: 1m
+      cacheSize: 1000
+      cacheTTL: 15m
+      trustedProxyCIDRs:
+        - 10.17.1.0/24
+      clientIPHeaders:
+        - CF-Connecting-IP
+        - True-Client-IP
+        - X-Forwarded-For
+        - Forwarded
+        - X-Real-IP
+      blockNonUS: true
+      blockUSStates: true
+      blockedStates:
+        - CA
+        - NY
+      databaseFailurePolicy: deny
+      lookupFailurePolicy: deny
+      invalidClientIPPolicy: deny
+      unknownCountryPolicy: deny
+      unknownSubdivisionPolicy: deny
+      privateIPPolicy: deny
+      whitelistedPaths:
+        - /health
+      whitelistedPathPrefixes:
+        - /.well-known
+      logLevel: warn
+      logClientIP: false

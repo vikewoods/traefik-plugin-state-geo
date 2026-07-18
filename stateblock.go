@@ -3,39 +3,72 @@ package traefik_plugin_state_geo
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
-	"os"
 	"strings"
-	"sync"
-
-	"github.com/oschwald/maxminddb-golang"
 )
 
+// Config defines the State Geo Block middleware configuration.
 type Config struct {
-	BlockedStates    []string `json:"blockedStates,omitempty"`
-	WhitelistedIPs   []string `json:"whitelistedIPs,omitempty"`
-	WhitelistedPaths []string `json:"whitelistedPaths,omitempty"`
-	DBPath           string   `json:"dbPath,omitempty"`
-	TemplatePath     string   `json:"templatePath,omitempty"`
-	TemplateHTML     string   `json:"templateHTML,omitempty"`
-	FailOpen         bool     `json:"failOpen,omitempty"`
-	BlockNonUS       bool     `json:"blockNonUS,omitempty"`
-	BlockUSStates    bool     `json:"blockUSStates,omitempty"`
+	BlockedStates            []string `json:"blockedStates,omitempty"`
+	WhitelistedIPs           []string `json:"whitelistedIPs,omitempty"`
+	WhitelistedPaths         []string `json:"whitelistedPaths,omitempty"`
+	WhitelistedPathPrefixes  []string `json:"whitelistedPathPrefixes,omitempty"`
+	ClientIPHeaders          []string `json:"clientIPHeaders,omitempty"`
+	TrustedProxyCIDRs        []string `json:"trustedProxyCIDRs,omitempty"`
+	DBPath                   string   `json:"dbPath,omitempty"`
+	DatabaseReloadInterval   string   `json:"databaseReloadInterval,omitempty"`
+	CacheSize                int      `json:"cacheSize,omitempty"`
+	CacheTTL                 string   `json:"cacheTTL,omitempty"`
+	TemplatePath             string   `json:"templatePath,omitempty"`
+	TemplateHTML             string   `json:"templateHTML,omitempty"`
+	DatabaseFailurePolicy    string   `json:"databaseFailurePolicy,omitempty"`
+	LookupFailurePolicy      string   `json:"lookupFailurePolicy,omitempty"`
+	InvalidClientIPPolicy    string   `json:"invalidClientIPPolicy,omitempty"`
+	UnknownCountryPolicy     string   `json:"unknownCountryPolicy,omitempty"`
+	UnknownSubdivisionPolicy string   `json:"unknownSubdivisionPolicy,omitempty"`
+	PrivateIPPolicy          string   `json:"privateIPPolicy,omitempty"`
+	LogLevel                 string   `json:"logLevel,omitempty"`
+	LogClientIP              bool     `json:"logClientIP,omitempty"`
+	FailOpen                 bool     `json:"failOpen,omitempty"` // Deprecated: use DatabaseFailurePolicy.
+	BlockNonUS               bool     `json:"blockNonUS,omitempty"`
+	BlockUSStates            bool     `json:"blockUSStates,omitempty"`
 }
 
+// CreateConfig returns the middleware's documented default configuration.
 func CreateConfig() *Config {
 	return &Config{
-		BlockedStates:    []string{},
-		WhitelistedIPs:   []string{},
-		WhitelistedPaths: []string{},
-		DBPath:           "",
-		TemplatePath:     "",
-		TemplateHTML:     "",
-		FailOpen:         true,
-		BlockNonUS:       true,
-		BlockUSStates:    true,
+		BlockedStates:           []string{},
+		WhitelistedIPs:          []string{},
+		WhitelistedPaths:        []string{},
+		WhitelistedPathPrefixes: []string{},
+		ClientIPHeaders: []string{
+			"CF-Connecting-IP",
+			"True-Client-IP",
+			"X-Forwarded-For",
+			"Forwarded",
+			"X-Real-IP",
+		},
+		TrustedProxyCIDRs:        []string{},
+		DBPath:                   "",
+		DatabaseReloadInterval:   defaultDatabaseReloadInterval.String(),
+		CacheSize:                defaultDecisionCacheSize,
+		CacheTTL:                 defaultDecisionCacheTTL.String(),
+		TemplatePath:             "",
+		TemplateHTML:             "",
+		DatabaseFailurePolicy:    "legacy",
+		LookupFailurePolicy:      "allow",
+		InvalidClientIPPolicy:    "allow",
+		UnknownCountryPolicy:     "allow",
+		UnknownSubdivisionPolicy: "deny",
+		PrivateIPPolicy:          "allow",
+		LogLevel:                 "warn",
+		LogClientIP:              false,
+		FailOpen:                 true,
+		BlockNonUS:               true,
+		BlockUSStates:            true,
 	}
 }
 
@@ -44,20 +77,21 @@ type cacheEntry struct {
 	stateCode string
 }
 
-type StateBlock struct {
-	next             http.Handler
-	blockedStates    map[string]struct{}
-	whitelistedIPs   map[netip.Addr]struct{}
-	whitelistedCIDRs []netip.Prefix
-	whitelistedPaths map[string]struct{}
-	db               *maxminddb.Reader
-	templatePath     string
-	templateCache    string
-	name             string
-	cache            map[string]cacheEntry
-	cacheMutex       sync.RWMutex
-	blockNonUS       bool
-	blockUSStates    bool
+type stateBlock struct {
+	next                    http.Handler
+	blockedStates           map[string]struct{}
+	whitelistedIPs          map[netip.Addr]struct{}
+	whitelistedCIDRs        []netip.Prefix
+	whitelistedPaths        map[string]struct{}
+	whitelistedPathPrefixes []string
+	dbManager               *databaseManager
+	blockPage               *blockPageRenderer
+	cache                   *decisionCache
+	blockNonUS              bool
+	blockUSStates           bool
+	clientIPResolver        *clientIPResolver
+	policies                policySet
+	logger                  *pluginLogger
 
 	// test-only hook
 	mockGeoLookup func(net.IP) (countryCode string, subdivisionCode string, err error)
@@ -72,105 +106,185 @@ type geoRecord struct {
 	} `maxminddb:"subdivisions"`
 }
 
+// New constructs a State Geo Block middleware instance.
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
-	var db *maxminddb.Reader
+	if config == nil {
+		return nil, fmt.Errorf("config must not be nil")
+	}
+	if next == nil {
+		return nil, fmt.Errorf("next handler must not be nil")
+	}
+
+	logger, err := newPluginLogger(name, config.LogLevel, config.LogClientIP)
+	if err != nil {
+		return nil, fmt.Errorf("configure logging: %w", err)
+	}
+
+	policies, err := parsePolicySet(config)
+	if err != nil {
+		return nil, fmt.Errorf("configure decision policies: %w", err)
+	}
+
+	clientIPResolver, err := newClientIPResolver(config.ClientIPHeaders, config.TrustedProxyCIDRs)
+	if err != nil {
+		return nil, fmt.Errorf("configure client IP resolver: %w", err)
+	}
+
+	reloadInterval, err := parseDatabaseReloadInterval(config.DatabaseReloadInterval)
+	if err != nil {
+		return nil, fmt.Errorf("configure database reload: %w", err)
+	}
+
+	cacheSize, cacheTTL, err := parseDecisionCacheConfig(config.CacheSize, config.CacheTTL)
+	if err != nil {
+		return nil, fmt.Errorf("configure decision cache: %w", err)
+	}
+	cache := newDecisionCache(cacheSize, cacheTTL)
+
+	blockPage, err := newBlockPageRenderer(config)
+	if err != nil {
+		return nil, fmt.Errorf("configure block page: %w", err)
+	}
+
+	blockedMap, err := parseBlockedStateRules(config.BlockedStates)
+	if err != nil {
+		return nil, err
+	}
+
+	whitelistMap, whitelistedCIDRs, err := parseWhitelistedIPRules(config.WhitelistedIPs)
+	if err != nil {
+		return nil, err
+	}
+
+	whitelistedPaths, whitelistedPathPrefixes, err := parseWhitelistedPathRules(
+		config.WhitelistedPaths,
+		config.WhitelistedPathPrefixes,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var dbManager *databaseManager
 
 	if config.DBPath == "" {
-		fmt.Fprintf(os.Stderr, "[%s] WARN: dbPath is empty; GeoIP database not loaded. Operating in fail-open pass-through mode.\n", name)
+		if policies.databaseFailure == databaseFailurePolicyError {
+			return nil, fmt.Errorf("geoip database path is empty and databaseFailurePolicy requires an error")
+		}
+		logger.warn(
+			ctx,
+			"geoip database is not configured",
+			"",
+			slog.String("database_failure_policy", databaseFailurePolicyName(policies.databaseFailure)),
+		)
 	} else {
-		openedDB, err := maxminddb.Open(config.DBPath)
+		dbManager, err = getSharedDatabaseManager(config.DBPath, reloadInterval)
+		if err == nil {
+			err = dbManager.ensureLoaded()
+		}
 		if err != nil {
-			if !config.FailOpen {
+			if policies.databaseFailure == databaseFailurePolicyError {
 				return nil, fmt.Errorf("failed to open geoip database: %w", err)
 			}
-			fmt.Fprintf(os.Stderr, "[%s] WARN: failed to open geoip database at %s: %v. Operating in fail-open pass-through mode.\n", name, config.DBPath, err)
-		} else {
-			db = openedDB
+			logger.warn(
+				ctx,
+				"geoip database is unavailable",
+				"",
+				slog.String("path", config.DBPath),
+				slog.Any("error", err),
+				slog.String("database_failure_policy", databaseFailurePolicyName(policies.databaseFailure)),
+			)
 		}
 	}
 
-	var templateContent string
-	if config.TemplateHTML != "" {
-		templateContent = config.TemplateHTML
-	} else if config.TemplatePath != "" {
-		content, err := os.ReadFile(config.TemplatePath)
-		if err == nil {
-			templateContent = string(content)
-		} else {
-			fmt.Fprintf(os.Stderr, "[%s] ERROR: failed to pre-load template: %v\n", name, err)
-		}
-	}
-
-	blockedMap := make(map[string]struct{})
-	for _, state := range config.BlockedStates {
-		blockedMap[strings.ToUpper(strings.TrimSpace(state))] = struct{}{}
-	}
-
-	whitelistMap, whitelistedCIDRs := parseWhitelistedIPRules(config.WhitelistedIPs, name)
-
-	whitelistedPathsMap := make(map[string]struct{})
-	for _, path := range config.WhitelistedPaths {
-		whitelistedPathsMap[path] = struct{}{}
-	}
-
-	return &StateBlock{
-		blockedStates:    blockedMap,
-		whitelistedIPs:   whitelistMap,
-		whitelistedCIDRs: whitelistedCIDRs,
-		whitelistedPaths: whitelistedPathsMap,
-		db:               db,
-		templatePath:     config.TemplatePath,
-		templateCache:    templateContent,
-		next:             next,
-		name:             name,
-		cache:            make(map[string]cacheEntry),
-		blockNonUS:       config.BlockNonUS,
-		blockUSStates:    config.BlockUSStates,
-		mockGeoLookup:    nil,
+	return &stateBlock{
+		blockedStates:           blockedMap,
+		whitelistedIPs:          whitelistMap,
+		whitelistedCIDRs:        whitelistedCIDRs,
+		whitelistedPaths:        whitelistedPaths,
+		whitelistedPathPrefixes: whitelistedPathPrefixes,
+		dbManager:               dbManager,
+		blockPage:               blockPage,
+		next:                    next,
+		cache:                   cache,
+		blockNonUS:              config.BlockNonUS,
+		blockUSStates:           config.BlockUSStates,
+		clientIPResolver:        clientIPResolver,
+		policies:                policies,
+		logger:                  logger,
+		mockGeoLookup:           nil,
 	}, nil
 }
 
-func parseWhitelistedIPRules(entries []string, name string) (map[netip.Addr]struct{}, []netip.Prefix) {
-	exactIPs := make(map[netip.Addr]struct{})
-	var cidrs []netip.Prefix
-
+func parseBlockedStateRules(entries []string) (map[string]struct{}, error) {
+	states := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
-		entry = strings.TrimSpace(entry)
+		state := strings.ToUpper(strings.TrimSpace(entry))
+		if len(state) != 2 || state[0] < 'A' || state[0] > 'Z' || state[1] < 'A' || state[1] > 'Z' {
+			return nil, fmt.Errorf("invalid blockedStates entry %q: expected a two-letter subdivision code", entry)
+		}
+		states[state] = struct{}{}
+	}
+	return states, nil
+}
+
+func parseWhitelistedIPRules(entries []string) (map[netip.Addr]struct{}, []netip.Prefix, error) {
+	exactIPs := make(map[netip.Addr]struct{}, len(entries))
+	cidrs := make([]netip.Prefix, 0, len(entries))
+	seenCIDRs := make(map[string]struct{}, len(entries))
+
+	for _, rawEntry := range entries {
+		entry := strings.TrimSpace(rawEntry)
 		if entry == "" {
-			continue
+			return nil, nil, fmt.Errorf("invalid whitelistedIPs entry %q: value must not be empty", rawEntry)
 		}
 
 		if strings.Contains(entry, "/") {
 			prefix, err := netip.ParsePrefix(entry)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[%s] WARN: invalid whitelistedIPs CIDR entry %q skipped: %v\n", name, entry, err)
+				return nil, nil, fmt.Errorf("invalid whitelistedIPs CIDR entry %q: %w", rawEntry, err)
+			}
+			prefix, err = normalizePrefix(prefix)
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid whitelistedIPs CIDR entry %q: %w", rawEntry, err)
+			}
+			key := prefix.String()
+			if _, exists := seenCIDRs[key]; exists {
 				continue
 			}
-			cidrs = append(cidrs, prefix.Masked())
+			seenCIDRs[key] = struct{}{}
+			cidrs = append(cidrs, prefix)
 			continue
 		}
 
 		ip, err := netip.ParseAddr(entry)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[%s] WARN: invalid whitelistedIPs IP entry %q skipped: %v\n", name, entry, err)
-			continue
+			return nil, nil, fmt.Errorf("invalid whitelistedIPs IP entry %q: %w", rawEntry, err)
 		}
-		exactIPs[ip.Unmap()] = struct{}{}
+		ip, err = normalizeAddress(ip)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid whitelistedIPs IP entry %q: %w", rawEntry, err)
+		}
+		exactIPs[ip] = struct{}{}
 	}
 
-	return exactIPs, cidrs
+	return exactIPs, cidrs, nil
 }
 
-func (a *StateBlock) isPathWhitelisted(reqPath string) bool {
-	for whitelistedPath := range a.whitelistedPaths {
-		if strings.HasPrefix(reqPath, whitelistedPath) {
+func (a *stateBlock) isPathWhitelisted(reqPath string) bool {
+	normalized := normalizeRequestPath(reqPath)
+	if _, exists := a.whitelistedPaths[normalized]; exists {
+		return true
+	}
+
+	for _, prefix := range a.whitelistedPathPrefixes {
+		if pathMatchesPrefix(normalized, prefix) {
 			return true
 		}
 	}
 	return false
 }
 
-func (a *StateBlock) isIPWhitelisted(ipStr string) bool {
+func (a *stateBlock) isIPWhitelisted(ipStr string) bool {
 	ip, err := netip.ParseAddr(strings.TrimSpace(ipStr))
 	if err != nil {
 		return false
@@ -190,32 +304,50 @@ func (a *StateBlock) isIPWhitelisted(ipStr string) bool {
 	return false
 }
 
-func (a *StateBlock) serveBlocked(rw http.ResponseWriter, state string) {
+func (a *stateBlock) serveBlocked(
+	rw http.ResponseWriter,
+	req *http.Request,
+	state string,
+	clientIP string,
+) {
+	body, renderErr := a.blockPage.render(state)
+	if renderErr != nil {
+		a.logger.error(
+			req.Context(),
+			"block page rendering failed; built-in fallback used",
+			clientIP,
+			slog.Any("error", renderErr),
+		)
+	}
+
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(http.StatusForbidden)
 
-	fmt.Printf("[%s] DEBUG: Blocking request from state: %s\n", a.name, state)
-
-	if a.templateCache != "" {
-		html := strings.ReplaceAll(a.templateCache, "{{STATE}}", state)
-		_, _ = rw.Write([]byte(html))
-		return
+	a.logger.debug(
+		req.Context(),
+		"request denied by geo policy",
+		clientIP,
+		slog.String("state", state),
+	)
+	if _, err := rw.Write(body); err != nil {
+		a.logger.error(req.Context(), "write block page response failed", clientIP, slog.Any("error", err))
 	}
-
-	_, _ = rw.Write([]byte(fmt.Sprintf("<h1>Access Denied</h1><p>State: %s</p>", state)))
 }
 
-func (a *StateBlock) resolveGeo(ip net.IP) (countryCode string, subdivisionCode string, err error) {
+func (a *stateBlock) resolveGeo(
+	ip net.IP,
+	database geoDatabase,
+) (countryCode string, subdivisionCode string, err error) {
 	if a.mockGeoLookup != nil {
 		return a.mockGeoLookup(ip)
 	}
 
-	if a.db == nil {
-		return "", "", nil
+	if database == nil {
+		return "", "", fmt.Errorf("geoip database is unavailable")
 	}
 
 	var record geoRecord
-	if err := a.db.Lookup(ip, &record); err != nil {
+	if err := database.Lookup(ip, &record); err != nil {
 		return "", "", err
 	}
 
@@ -227,41 +359,79 @@ func (a *StateBlock) resolveGeo(ip net.IP) (countryCode string, subdivisionCode 
 	return countryCode, subdivisionCode, nil
 }
 
-func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
-	// 0. Check paths whitelist first
+func (a *stateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	// A path bypass does not need a client address or database lookup.
 	if a.isPathWhitelisted(req.URL.Path) {
-		fmt.Printf("[%s] DEBUG: Path %s is whitelisted, allowing\n", a.name, req.URL.Path)
+		a.logger.debug(
+			req.Context(),
+			"request path is whitelisted",
+			"",
+			slog.String("path", req.URL.Path),
+		)
 		a.next.ServeHTTP(rw, req)
 		return
 	}
 
-	ipStr := getRemoteIP(req)
+	clientIP, err := a.clientIPResolver.resolve(req)
+	if err != nil {
+		attrs := []slog.Attr{}
+		remoteAddr := ""
+		if a.logger.includeClientIP {
+			remoteAddr = req.RemoteAddr
+			attrs = append(attrs, slog.Any("error", err))
+		}
+		a.logger.error(req.Context(), "client ip resolution failed", remoteAddr, attrs...)
+		a.servePolicyDecision(rw, req, a.policies.invalidClientIP, "")
+		return
+	}
+	ipStr := clientIP.addr.String()
 
-	// 1. Check static IP/CIDR whitelist
+	// Apply the static IP/CIDR whitelist before GeoIP evaluation.
 	if a.isIPWhitelisted(ipStr) {
-		fmt.Printf("[%s] DEBUG: IP %s is whitelisted, allowing\n", a.name, ipStr)
+		a.logger.debug(req.Context(), "client ip is whitelisted", ipStr)
 		a.next.ServeHTTP(rw, req)
 		return
 	}
 
-	// 1.5 Fail-open if no runtime DB and no mock
-	if a.db == nil && a.mockGeoLookup == nil {
-		a.next.ServeHTTP(rw, req)
+	snapshot := databaseSnapshot{}
+	if a.mockGeoLookup == nil && a.dbManager != nil {
+		loadedSnapshot, reloadErr := a.dbManager.snapshot()
+		snapshot = loadedSnapshot
+		if reloadErr != nil {
+			a.logger.warn(
+				req.Context(),
+				"geoip database reload failed; last known-good reader retained",
+				"",
+				slog.Any("error", reloadErr),
+			)
+		}
+	}
+
+	// Apply the configured database-unavailable decision if there is no reader.
+	if snapshot.reader == nil && a.mockGeoLookup == nil {
+		policy := decisionPolicyAllow
+		if a.policies.databaseFailure == databaseFailurePolicyDeny {
+			policy = decisionPolicyDeny
+		}
+		a.servePolicyDecision(rw, req, policy, ipStr)
 		return
 	}
 
-	// 2. Check Decision Cache
-	a.cacheMutex.RLock()
-	entry, found := a.cache[ipStr]
-	a.cacheMutex.RUnlock()
+	// Check the bounded, expiring decision cache for this database generation.
+	entry, found := a.cache.get(ipStr, snapshot.version)
 
 	if found {
 		if entry.allowed {
-			fmt.Printf("[%s] DEBUG: Cache hit for %s: ALLOWED\n", a.name, ipStr)
+			a.logger.debug(req.Context(), "allowed decision cache hit", ipStr)
 			a.next.ServeHTTP(rw, req)
 		} else {
-			fmt.Printf("[%s] DEBUG: Cache hit for %s: BLOCKED (%s)\n", a.name, ipStr, entry.stateCode)
-			a.serveBlocked(rw, entry.stateCode)
+			a.logger.debug(
+				req.Context(),
+				"denied decision cache hit",
+				ipStr,
+				slog.String("state", entry.stateCode),
+			)
+			a.serveBlocked(rw, req, entry.stateCode, ipStr)
 		}
 		return
 	}
@@ -269,74 +439,98 @@ func (a *StateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	isAllowed := true
 	stateCode := ""
 
-	ip := net.ParseIP(ipStr)
-	if ip != nil {
-		if ip.IsPrivate() || ip.IsLoopback() {
-			fmt.Printf("[%s] DEBUG: Private/loopback IP %s detected, allowing\n", a.name, ipStr)
+	ip := net.IP(clientIP.addr.AsSlice())
+	if ip.IsPrivate() || ip.IsLoopback() {
+		switch a.policies.privateIP {
+		case privateIPPolicyAllow:
+			a.logger.debug(req.Context(), "private or loopback client ip allowed by policy", ipStr)
 			a.next.ServeHTTP(rw, req)
 			return
+		case privateIPPolicyDeny:
+			a.serveBlocked(rw, req, "Unknown", ipStr)
+			return
+		case privateIPPolicyLookup:
+			// Continue to the same GeoIP lookup and policies used for public addresses.
 		}
+	}
 
-		countryCode, subdivisionCode, err := a.resolveGeo(ip)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[%s] ERROR: GeoIP lookup failed for %s: %v\n", a.name, ipStr, err)
-		} else {
-			fmt.Printf("[%s] DEBUG: Geo lookup for %s -> country=%s subdivision=%s\n", a.name, ipStr, countryCode, subdivisionCode)
+	countryCode, subdivisionCode, err := a.resolveGeo(ip, snapshot.reader)
+	if err != nil {
+		attrs := []slog.Attr{}
+		if a.logger.includeClientIP {
+			attrs = append(attrs, slog.Any("error", err))
+		}
+		a.logger.error(req.Context(), "geoip lookup failed", ipStr, attrs...)
+		a.servePolicyDecision(rw, req, a.policies.lookupFailure, ipStr)
+		return
+	}
 
-			if countryCode == "" {
-				fmt.Printf("[%s] WARN: No country resolved for %s, allowing (fail-open unresolved lookup)\n", a.name, ipStr)
-			} else if countryCode != "US" {
-				if a.blockNonUS {
-					isAllowed = false
-					stateCode = countryCode
-				}
-			} else {
-				if subdivisionCode != "" {
-					stateCode = subdivisionCode
-					if a.blockUSStates {
-						if _, ok := a.blockedStates[stateCode]; ok {
-							isAllowed = false
-						}
-					}
-				} else {
-					if a.blockUSStates {
-						isAllowed = false
-						stateCode = "Unknown"
-					}
-				}
+	a.logger.debug(
+		req.Context(),
+		"geoip lookup completed",
+		ipStr,
+		slog.String("country", countryCode),
+		slog.String("subdivision", subdivisionCode),
+	)
+
+	switch {
+	case countryCode == "":
+		isAllowed = a.policies.unknownCountry == decisionPolicyAllow
+		if !isAllowed {
+			stateCode = "Unknown"
+		}
+	case countryCode != "US":
+		if a.blockNonUS {
+			isAllowed = false
+			stateCode = countryCode
+		}
+	case subdivisionCode != "":
+		stateCode = subdivisionCode
+		if a.blockUSStates {
+			if _, isBlocked := a.blockedStates[stateCode]; isBlocked {
+				isAllowed = false
+			}
+		}
+	default:
+		if a.blockUSStates {
+			isAllowed = a.policies.unknownSubdivision == decisionPolicyAllow
+			if !isAllowed {
+				stateCode = "Unknown"
 			}
 		}
 	}
 
-	// 4. Update Cache
-	a.cacheMutex.Lock()
-	if len(a.cache) < 1000 {
-		a.cache[ipStr] = cacheEntry{allowed: isAllowed, stateCode: stateCode}
-	}
-	a.cacheMutex.Unlock()
+	// A later database generation invalidates this cached decision.
+	a.cache.set(
+		ipStr,
+		snapshot.version,
+		cacheEntry{allowed: isAllowed, stateCode: stateCode},
+	)
 
 	if !isAllowed {
-		a.serveBlocked(rw, stateCode)
+		a.serveBlocked(rw, req, stateCode, ipStr)
 		return
 	}
 
-	fmt.Printf("[%s] DEBUG: New IP %s allowed (State: %s)\n", a.name, ipStr, stateCode)
+	a.logger.debug(
+		req.Context(),
+		"request allowed by geo policy",
+		ipStr,
+		slog.String("state", stateCode),
+	)
 	a.next.ServeHTTP(rw, req)
 }
 
-func getRemoteIP(req *http.Request) string {
-	if cf := req.Header.Get("Cf-Connecting-Ip"); cf != "" {
-		return strings.TrimSpace(cf)
+func (a *stateBlock) servePolicyDecision(
+	rw http.ResponseWriter,
+	req *http.Request,
+	policy decisionPolicy,
+	clientIP string,
+) {
+	if policy == decisionPolicyDeny {
+		a.serveBlocked(rw, req, "Unknown", clientIP)
+		return
 	}
 
-	if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
-	}
-
-	res, _, err := net.SplitHostPort(req.RemoteAddr)
-	if err != nil {
-		return strings.TrimSpace(req.RemoteAddr)
-	}
-	return strings.TrimSpace(res)
+	a.next.ServeHTTP(rw, req)
 }

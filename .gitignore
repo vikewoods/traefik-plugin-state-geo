@@ -5,3 +5,11 @@
 docker-compose.yml
 www
 www/*
+coverage.out
+dist/
+*.test
+*.prof
+data/*.mmdb
+docs/research/*
+docs/research
+docs/PHASES.md

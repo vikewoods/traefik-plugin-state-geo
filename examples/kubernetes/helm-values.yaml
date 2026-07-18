@@ -1,0 +1,27 @@
+# Merge this fragment into the Traefik chart values.
+# Replace vX.Y.Z and every example network with values validated for the cluster.
+experimental:
+  abortOnPluginFailure: true
+  plugins:
+    stateGeoBlock:
+      moduleName: github.com/vikewoods/traefik-plugin-state-geo
+      version: vX.Y.Z
+
+deployment:
+  additionalVolumes:
+    - name: geolite-db
+      persistentVolumeClaim:
+        claimName: traefik-geolite-db
+
+additionalVolumeMounts:
+  - name: geolite-db
+    mountPath: /data/geolite
+    readOnly: true
+
+ports:
+  websecure:
+    forwardedHeaders:
+      insecure: false
+      trustedIPs:
+        - 10.17.1.0/24
+        # Add the current trusted CDN/proxy IPv4 and IPv6 ranges.
