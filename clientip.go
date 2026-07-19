@@ -2,6 +2,7 @@ package traefik_plugin_state_geo
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -28,11 +29,16 @@ type resolvedClientIP struct {
 }
 
 type clientIPResolver struct {
-	headers        []clientIPHeader
-	trustedProxies []netip.Prefix
+	headers                     []clientIPHeader
+	trustedProxies              []netip.Prefix
+	rejectInvalidTrustedHeaders bool
+	logger                      *pluginLogger
 }
 
-func newClientIPResolver(headerNames, trustedProxyCIDRs []string) (*clientIPResolver, error) {
+func newClientIPResolver(
+	headerNames, trustedProxyCIDRs []string,
+	rejectInvalidTrustedHeaders bool,
+) (*clientIPResolver, error) {
 	headers := make([]clientIPHeader, 0, len(headerNames))
 	seenHeaders := make(map[string]struct{}, len(headerNames))
 
@@ -73,8 +79,9 @@ func newClientIPResolver(headerNames, trustedProxyCIDRs []string) (*clientIPReso
 	}
 
 	return &clientIPResolver{
-		headers:        headers,
-		trustedProxies: trustedProxies,
+		headers:                     headers,
+		trustedProxies:              trustedProxies,
+		rejectInvalidTrustedHeaders: rejectInvalidTrustedHeaders,
 	}, nil
 }
 
@@ -104,6 +111,19 @@ func (r *clientIPResolver) resolve(req *http.Request) (resolvedClientIP, error) 
 
 		addr, err := r.resolveHeader(header, values)
 		if err != nil {
+			r.logger.warn(
+				req.Context(),
+				"trusted client ip header is invalid",
+				"",
+				slog.String("header", header.name),
+				slog.Bool("request_rejected", r.rejectInvalidTrustedHeaders),
+			)
+			if r.rejectInvalidTrustedHeaders {
+				return resolvedClientIP{}, fmt.Errorf(
+					"trusted client IP header %q is invalid",
+					header.name,
+				)
+			}
 			continue
 		}
 

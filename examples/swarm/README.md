@@ -18,12 +18,20 @@ deploy:
     - traefik.http.routers.app.middlewares=state-geo-block
     - traefik.http.middlewares.state-geo-block.plugin.stateGeoBlock.dbPath=/data/geolite/GeoLite2-City.mmdb
     - traefik.http.middlewares.state-geo-block.plugin.stateGeoBlock.trustedProxyCIDRs=10.17.1.0/24
-    - traefik.http.middlewares.state-geo-block.plugin.stateGeoBlock.clientIPHeaders=CF-Connecting-IP,True-Client-IP,X-Forwarded-For,Forwarded,X-Real-IP
+    - traefik.http.middlewares.state-geo-block.plugin.stateGeoBlock.clientIPHeaders=X-Forwarded-For
+    - traefik.http.middlewares.state-geo-block.plugin.stateGeoBlock.rejectInvalidClientIPHeaders=true
     - traefik.http.middlewares.state-geo-block.plugin.stateGeoBlock.blockedStates=CA,NY
     - traefik.http.middlewares.state-geo-block.plugin.stateGeoBlock.databaseFailurePolicy=deny
+    - traefik.http.middlewares.state-geo-block.plugin.stateGeoBlock.invalidClientIPPolicy=deny
     - traefik.http.middlewares.state-geo-block.plugin.stateGeoBlock.privateIPPolicy=deny
+    - traefik.http.middlewares.state-geo-block.plugin.stateGeoBlock.logLevel=info
 ```
 
 The database and any `templatePath` must be mounted into every node on which a
 Traefik task can run. Local plugin source mounts are intended for development;
 production should use an immutable released tag.
+
+For a Cloudflare-only router whose origin is not directly reachable, a
+separate Middleware may put `CF-Connecting-IP` before XFF. Do not enable a
+provider header on a generic route where the load balancer could preserve a
+client-supplied value.

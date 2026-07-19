@@ -18,10 +18,10 @@ func TestCreateConfigDecisionPolicyDefaults(t *testing.T) {
 	}{
 		{name: "database failure", actual: config.DatabaseFailurePolicy, expected: "legacy"},
 		{name: "lookup failure", actual: config.LookupFailurePolicy, expected: "allow"},
-		{name: "invalid client ip", actual: config.InvalidClientIPPolicy, expected: "allow"},
+		{name: "invalid client ip", actual: config.InvalidClientIPPolicy, expected: "deny"},
 		{name: "unknown country", actual: config.UnknownCountryPolicy, expected: "allow"},
 		{name: "unknown subdivision", actual: config.UnknownSubdivisionPolicy, expected: "deny"},
-		{name: "private ip", actual: config.PrivateIPPolicy, expected: "allow"},
+		{name: "private ip", actual: config.PrivateIPPolicy, expected: "deny"},
 	}
 
 	for _, test := range tests {
@@ -48,8 +48,8 @@ func TestCreateConfigDecisionPolicyDefaults(t *testing.T) {
 	if len(config.WhitelistedPathPrefixes) != 0 {
 		t.Errorf("whitelisted path prefix default = %v, want empty", config.WhitelistedPathPrefixes)
 	}
-	if config.LogLevel != "warn" {
-		t.Errorf("log level default = %q, want warn", config.LogLevel)
+	if config.LogLevel != "info" {
+		t.Errorf("log level default = %q, want info", config.LogLevel)
 	}
 	if config.LogClientIP {
 		t.Error("log client IP default = true, want false")
@@ -330,6 +330,37 @@ func TestRuntimeDecisionPolicies(t *testing.T) {
 				config.BlockNonUS = true
 			},
 			remoteAddr: "10.17.1.25:443",
+			geo: mockGeoResult{
+				country: "GB",
+			},
+			expectedStatus:  http.StatusForbidden,
+			expectedLookups: 1,
+		},
+		{
+			name: "IPv4 link-local address uses private deny policy",
+			configure: func(config *Config) {
+				config.PrivateIPPolicy = "deny"
+			},
+			remoteAddr:      "169.254.10.20:443",
+			expectedStatus:  http.StatusForbidden,
+			expectedLookups: 0,
+		},
+		{
+			name: "IPv6 link-local address uses private allow policy",
+			configure: func(config *Config) {
+				config.PrivateIPPolicy = "allow"
+			},
+			remoteAddr:      "[fe80::1234]:443",
+			expectedStatus:  http.StatusOK,
+			expectedLookups: 0,
+		},
+		{
+			name: "IPv6 link-local address uses private lookup policy",
+			configure: func(config *Config) {
+				config.PrivateIPPolicy = "lookup"
+				config.BlockNonUS = true
+			},
+			remoteAddr: "[fe80::1234]:443",
 			geo: mockGeoResult{
 				country: "GB",
 			},

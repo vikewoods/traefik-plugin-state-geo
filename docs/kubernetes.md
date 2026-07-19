@@ -101,9 +101,19 @@ omitted Cloudflare IPv6 ranges while `websecure` included them; retain or align
 those ranges based on which entry point handles real application requests.
 
 Traefik rewrites `X-Real-IP` to the immediate peer and normally injects
-`X-Forwarded-For` before this Middleware runs. Prefer provider headers or XFF.
+`X-Forwarded-For` before this Middleware runs. The shared production preset
+uses only XFF. Do not add a provider-specific header to a route unless its
+upstream guarantees that direct clients cannot preserve or inject that header.
 If RFC `Forwarded` is authoritative for a route, put it before XFF in that
 Middleware's `clientIPHeaders`.
+
+With `externalTrafficPolicy: Cluster`, trusting the node CIDR is necessary for
+the observed topology but cannot prove whether a request reached the node from
+Cloudflare or directly. This limitation applies to XFF as well as provider
+headers: a direct client whose header survives to a node that Traefik trusts
+can influence the chain. Restrict origin reachability to the intended proxy,
+sanitize at a trusted upstream, or use separate entry points/routes where
+source authenticity matters.
 
 ## 4. Create a strict shared Middleware
 
@@ -118,16 +128,13 @@ spec:
     stateGeoBlock:
       dbPath: /data/geolite/GeoLite2-City.mmdb
       databaseReloadInterval: 1m
-      cacheSize: 1000
+      cacheSize: 50000
       cacheTTL: 15m
       trustedProxyCIDRs:
         - 10.17.1.0/24
       clientIPHeaders:
-        - CF-Connecting-IP
-        - True-Client-IP
         - X-Forwarded-For
-        - Forwarded
-        - X-Real-IP
+      rejectInvalidClientIPHeaders: true
       blockNonUS: true
       blockUSStates: true
       blockedStates:
@@ -143,7 +150,7 @@ spec:
         - /health
       whitelistedPathPrefixes:
         - /.well-known
-      logLevel: warn
+      logLevel: info
       logClientIP: false
 ```
 
@@ -151,6 +158,21 @@ This strict posture denies traffic when expected client identity or geography
 is absent. Choose `allow` policies deliberately for services that prioritize
 availability over enforcement. Path and IP bypasses are evaluated before
 database failure policy, so a tightly scoped health endpoint remains usable.
+`logLevel: info` makes 403 policy decisions visible during cutover without
+logging client addresses unless `logClientIP` is explicitly enabled.
+
+For a Cloudflare-only route whose origin cannot be reached directly and where
+Cloudflare overwrites the provider header, use a separate Middleware with:
+
+```yaml
+clientIPHeaders:
+  - CF-Connecting-IP
+  - X-Forwarded-For
+rejectInvalidClientIPHeaders: true
+```
+
+`True-Client-IP` is an opt-in Cloudflare Enterprise transform and should only
+be configured when the zone actually enables it.
 
 The audited CRD provider has `allowCrossNamespace: true`, so application
 IngressRoutes can reference this shared Middleware. A cluster without that
@@ -222,7 +244,8 @@ Attach the Middleware to a controlled host first and verify:
 | Cloudflare client in blocked state | 403 |
 | Known non-US client | 403 |
 | Valid trusted XFF fallback | geography-dependent result |
-| Malformed preferred header plus valid XFF | XFF fallback result |
+| Preferred provider header absent plus valid XFF | XFF result |
+| Present malformed trusted header plus valid XFF | 403 in strict mode |
 | Direct/untrusted peer with forged provider header | forged header ignored |
 | Missing client header with private SNAT peer | 403 |
 | Whitelisted exact health path | backend response |
@@ -233,6 +256,25 @@ Attach the Middleware to a controlled host first and verify:
 Observe status codes, warnings, latency, memory per pod, and false positives.
 The audited traffic was approximately 63.2% IPv6 client identities, so IPv6 is
 a mandatory canary case.
+
+The vendored pure-Go reader retains the full roughly 60–70 MiB MMDB on the Go
+heap and temporarily overlaps old/new copies during reload. Start with about
+150 MiB of pod-memory headroom above Traefik's measured baseline. The
+`cacheSize: 50000` value is a high-cardinality ingress starting point; tune it
+from observed heap use and cache effectiveness because every Middleware owns
+an independent cache.
+
+On 2026-07-19, the three live Traefik containers used 91, 93, and 98 MiB. The
+deployment requested 192 MiB and limited memory to 512 MiB before the plugin
+was enabled. The example Helm values therefore raise the request to 320 MiB
+for the canary and retain the 512 MiB limit. Re-measure after the reader is
+loaded and during a forced atomic replacement; these values are an initial
+scheduling budget, not a guaranteed requirement for every workload.
+
+As the final go-live gate, send a request from a known blocked-state source
+through the real external load-balancer path and require a 403. That validates
+the service traffic policy, node trust, entry-point header processing, plugin
+resolver, MMDB, and Middleware attachment together.
 
 ## Rollback
 

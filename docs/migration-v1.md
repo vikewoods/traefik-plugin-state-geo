@@ -1,8 +1,22 @@
 # Migration from v1
 
-The unreleased hardening work contains behavior changes and should be released
-as a new major version. Do not point production Traefik at a branch; migrate a
-canary to the new immutable tag after it is published.
+The v2 line contains major behavior changes. Do not point production Traefik
+at a branch; migrate a canary to a tested immutable prerelease or final tag.
+
+## Changes after `v2.0.0-alpha`
+
+The beta candidate hardens several alpha defaults:
+
+- `clientIPHeaders` defaults to only `X-Forwarded-For`; provider headers are
+  opt-in per route.
+- `rejectInvalidClientIPHeaders` defaults to `true`, so a malformed present
+  header from a trusted peer invokes `invalidClientIPPolicy` instead of
+  silently becoming the proxy address.
+- `invalidClientIPPolicy` and `privateIPPolicy` default to `deny`.
+- `logLevel` defaults to `info`, and deny decisions are emitted at info.
+- database replacement I/O no longer queues concurrent requests.
+
+Review these fields explicitly when moving an alpha configuration to beta.
 
 ## 1. Configure trusted peers
 
@@ -14,19 +28,18 @@ in `trustedProxyCIDRs`.
 trustedProxyCIDRs:
   - 10.17.1.0/24
 clientIPHeaders:
-  - CF-Connecting-IP
-  - True-Client-IP
   - X-Forwarded-For
-  - Forwarded
-  - X-Real-IP
+rejectInvalidClientIPHeaders: true
 ```
 
 The audited Kubernetes cluster needs the node CIDR because
 `externalTrafficPolicy: Cluster` replaces the external peer with a node/SNAT
 address. Configure Traefik's entry-point `forwardedHeaders.trustedIPs` as well.
 
-Traefik rewrites `X-Real-IP` to the immediate peer, so it is last by default.
-Prefer XFF or a provider-specific header for upstream client identity.
+Provider-specific headers remain supported, but enable them only on a route
+whose upstream guarantees that direct clients cannot preserve or inject them.
+Traefik rewrites `X-Real-IP` to the immediate peer, so it is not a default
+source.
 
 ## 2. Move prefix bypasses
 
@@ -57,6 +70,7 @@ invalidClientIPPolicy: deny
 unknownCountryPolicy: deny
 unknownSubdivisionPolicy: deny
 privateIPPolicy: deny
+rejectInvalidClientIPHeaders: true
 ```
 
 The example is strict. Use `allow` where application availability is more
@@ -95,17 +109,17 @@ keeps the last known-good reader.
 
 ## 6. Review private traffic and whitelists
 
-The compatibility default still allows private and loopback clients. A strict
-Kubernetes ingress should use `privateIPPolicy: deny` so a missing client
-header cannot turn a node-SNAT address into an implicit bypass. Explicit
-`whitelistedIPs`, `whitelistedPaths`, and `whitelistedPathPrefixes` still take
-priority.
+The default denies private, loopback, link-local, and unspecified clients so a
+missing client header cannot turn a node-SNAT address into an implicit bypass.
+Explicit `whitelistedIPs`, `whitelistedPaths`, and
+`whitelistedPathPrefixes` still take priority.
 
 ## 7. Review templates and logs
 
 - Inline and file templates are mutually exclusive and limited to 1 MiB.
 - Templates use `html/template`; `{{STATE}}` remains supported and escaped.
-- Routine request logging moved to `debug`.
+- Deny decisions are logged at `info`; routine allows/cache hits/lookups remain
+  at `debug`.
 - `logClientIP` is false by default and should be enabled only with an
   appropriate retention and access policy.
 

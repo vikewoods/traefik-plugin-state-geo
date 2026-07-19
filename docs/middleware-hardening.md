@@ -74,13 +74,21 @@ Template rules:
 The plugin no longer prints a line for every request. It uses a private `log/slog` JSON logger and does not modify Traefik's global logger.
 
 ```yaml
-logLevel: warn
+logLevel: info
 logClientIP: false
 ```
 
-Supported levels are `off`, `error`, `warn`, `info`, and `debug`. The default `warn` level emits database availability/reload warnings and handled errors, while routine allow/deny/cache/lookup events remain debug-only.
+Supported levels are `off`, `error`, `warn`, `info`, and `debug`. The default
+`info` level records deny decisions, while warnings expose malformed trusted
+headers and database degradation. Allow decisions, cache hits, and successful
+lookups remain debug-only.
 
-Client addresses are omitted by default, including from invalid-address and lookup-error details that could echo the address. `logClientIP: true` adds a structured `client_ip` attribute and permits detailed lookup/resolution error fields. This is an explicit privacy choice and should only be enabled with an appropriate log retention/access policy.
+Client addresses and raw forwarding-header values are omitted by default.
+MMDB lookup errors are still included because they describe decoder/database
+failures rather than the lookup address. `logClientIP: true` adds a structured
+`client_ip` attribute and permits detailed `RemoteAddr` resolution errors. This
+is an explicit privacy choice and should only be enabled with an appropriate
+log retention/access policy.
 
 Log messages are fixed, low-cardinality strings. State, country, path, policy, and errors are structured attributes rather than interpolated message text.
 

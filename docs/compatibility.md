@@ -2,11 +2,12 @@
 
 | Plugin line | Traefik runtime | Go for native checks | Status |
 | --- | --- | --- | --- |
-| Unreleased next major | v3.7.1 / Yaegi | 1.23 minimum; current stable in CI | Unit, race, fuzz, security, and interpreted HTTP smoke tests pass |
+| Unreleased v2 beta candidate | v3.7.1 / Yaegi | 1.23 minimum; current stable in CI | Native and interpreted validation required before beta tag |
+| v2.0.0-alpha | v3.7.1 / Yaegi | 1.23 | Published alpha; beta candidate changes defaults and reload concurrency |
 | v1.1.2 | Traefik v3-era local plugin deployment | 1.23 | Published legacy behavior; Kubernetes hardening is not present |
 
-The next major is tested against Traefik v3.7.1 because that exact version runs
-in the audited cluster. Other Traefik minor releases may use a different Yaegi
+The v2 line is tested against Traefik v3.7.1 because that exact version runs in
+the audited cluster. Other Traefik minor releases may use a different Yaegi
 version and require the same smoke test before being declared supported.
 
 The MMDB must be a MaxMind City database with `country.iso_code` and optional

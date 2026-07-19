@@ -142,10 +142,11 @@ func TestStateBlock(t *testing.T) {
 
 func TestStateBlockClientIPSourcesWithFixture(t *testing.T) {
 	tests := []struct {
-		name         string
-		remoteAddr   string
-		headers      map[string]string
-		expectedCode int
+		name                       string
+		remoteAddr                 string
+		headers                    map[string]string
+		allowInvalidHeaderFallback bool
+		expectedCode               int
 	}{
 		{
 			name:         "direct IPv4",
@@ -193,8 +194,9 @@ func TestStateBlockClientIPSourcesWithFixture(t *testing.T) {
 			expectedCode: http.StatusForbidden,
 		},
 		{
-			name:       "malformed preferred header falls back",
-			remoteAddr: "10.17.1.10:443",
+			name:                       "permissive malformed preferred header falls back",
+			remoteAddr:                 "10.17.1.10:443",
+			allowInvalidHeaderFallback: true,
 			headers: map[string]string{
 				"CF-Connecting-IP": "not-an-ip",
 				"X-Real-IP":        "216.160.83.56",
@@ -216,6 +218,14 @@ func TestStateBlockClientIPSourcesWithFixture(t *testing.T) {
 			cfg := CreateConfig()
 			cfg.BlockedStates = []string{"CA"}
 			cfg.TrustedProxyCIDRs = []string{"10.17.1.0/24"}
+			cfg.ClientIPHeaders = []string{
+				"CF-Connecting-IP",
+				"True-Client-IP",
+				"X-Forwarded-For",
+				"Forwarded",
+				"X-Real-IP",
+			}
+			cfg.RejectInvalidClientIPHeaders = !test.allowInvalidHeaderFallback
 			cfg.DBPath = testDatabasePath
 			cfg.LogLevel = "off"
 
@@ -555,13 +565,7 @@ func TestCreateConfigDefaults(t *testing.T) {
 		t.Fatalf("expected BlockUSStates default to be true")
 	}
 
-	expectedHeaders := []string{
-		"CF-Connecting-IP",
-		"True-Client-IP",
-		"X-Forwarded-For",
-		"Forwarded",
-		"X-Real-IP",
-	}
+	expectedHeaders := []string{"X-Forwarded-For"}
 	if len(cfg.ClientIPHeaders) != len(expectedHeaders) {
 		t.Fatalf("expected %d default client IP headers, got %d", len(expectedHeaders), len(cfg.ClientIPHeaders))
 	}
@@ -572,6 +576,9 @@ func TestCreateConfigDefaults(t *testing.T) {
 	}
 	if len(cfg.TrustedProxyCIDRs) != 0 {
 		t.Fatalf("expected no trusted proxy CIDRs by default, got %v", cfg.TrustedProxyCIDRs)
+	}
+	if !cfg.RejectInvalidClientIPHeaders {
+		t.Fatal("expected invalid trusted client IP headers to be rejected by default")
 	}
 }
 
@@ -779,6 +786,7 @@ func TestWhitelistedIPRulesBypassBlocking(t *testing.T) {
 			cfg.WhitelistedIPs = tt.whitelistedIPs
 			if len(tt.headers) > 0 {
 				cfg.TrustedProxyCIDRs = []string{"127.0.0.0/8"}
+				cfg.ClientIPHeaders = []string{"CF-Connecting-IP", "X-Forwarded-For"}
 			}
 
 			handler := newTestMiddleware(t, cfg, mockGeoResult{
@@ -852,6 +860,7 @@ func TestCfConnectingIPTakesPriorityOverXForwardedFor(t *testing.T) {
 	cfg := CreateConfig()
 	cfg.BlockNonUS = true
 	cfg.TrustedProxyCIDRs = []string{"127.0.0.0/8"}
+	cfg.ClientIPHeaders = []string{"CF-Connecting-IP", "X-Forwarded-For"}
 
 	handler := newTestMiddleware(t, cfg, mockGeoResult{
 		country: "GB",
@@ -873,6 +882,7 @@ func TestCfConnectingIPTakesPriorityOverXForwardedFor(t *testing.T) {
 func TestMiddlewareUsesResolvedIPv6ClientIPForGeoLookup(t *testing.T) {
 	cfg := CreateConfig()
 	cfg.TrustedProxyCIDRs = []string{"127.0.0.0/8"}
+	cfg.ClientIPHeaders = []string{"CF-Connecting-IP"}
 
 	handler := newTestMiddleware(t, cfg, mockGeoResult{
 		country: "US",

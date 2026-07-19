@@ -55,6 +55,10 @@ func (l *pluginLogger) debug(ctx context.Context, message, clientIP string, attr
 	l.log(ctx, slog.LevelDebug, message, clientIP, attrs...)
 }
 
+func (l *pluginLogger) info(ctx context.Context, message, clientIP string, attrs ...slog.Attr) {
+	l.log(ctx, slog.LevelInfo, message, clientIP, attrs...)
+}
+
 func (l *pluginLogger) warn(ctx context.Context, message, clientIP string, attrs ...slog.Attr) {
 	l.log(ctx, slog.LevelWarn, message, clientIP, attrs...)
 }

@@ -1,7 +1,7 @@
 # Release checklist
 
-The current hardening changes are breaking and should use the next major
-version. Do not publish or deploy a tag until every required item below passes.
+Use this checklist for every v2 prerelease and final release. Do not publish or
+deploy a new tag until every required item below passes.
 
 ## Repository and legal
 

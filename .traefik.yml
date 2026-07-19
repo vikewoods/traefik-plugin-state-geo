@@ -22,6 +22,7 @@ testData:
     - X-Real-IP
   trustedProxyCIDRs:
     - 127.0.0.0/8
+  rejectInvalidClientIPHeaders: true
   whitelistedIPs:
     - 192.0.2.10
   whitelistedPaths:

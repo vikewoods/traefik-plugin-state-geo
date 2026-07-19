@@ -8,12 +8,14 @@ The middleware exposes separate policies for conditions that do not produce a no
 | --- | --- | --- | --- | --- |
 | `databaseFailurePolicy` | `dbPath` is empty or the MMDB cannot be opened | `allow`, `deny`, `error`, `legacy` | `legacy` | Middleware starts and returns 403 after path/IP whitelist checks |
 | `lookupFailurePolicy` | The loaded MMDB returns a lookup error | `allow`, `deny` | `allow` | 403; the failed result is not cached |
-| `invalidClientIPPolicy` | No valid IP can be parsed from `RemoteAddr` | `allow`, `deny` | `allow` | 403 after the path whitelist check |
+| `invalidClientIPPolicy` | `RemoteAddr` is invalid, or a present trusted header is invalid in strict mode | `allow`, `deny` | `deny` | 403 after the path whitelist check |
 | `unknownCountryPolicy` | Lookup succeeds but returns no country | `allow`, `deny` | `allow` | 403 with `Unknown` as the template state |
 | `unknownSubdivisionPolicy` | Country is US, state blocking is enabled, and no subdivision is returned | `allow`, `deny` | `deny` | 403 with `Unknown` as the template state |
-| `privateIPPolicy` | Resolved client is private or loopback | `allow`, `lookup`, `deny` | `allow` | 403 without a GeoIP lookup |
+| `privateIPPolicy` | Resolved client is private, loopback, link-local, or unspecified | `allow`, `lookup`, `deny` | `deny` | 403 without a GeoIP lookup |
 
-`privateIPPolicy: lookup` sends private and loopback addresses through the normal MMDB lookup path. Because public GeoLite databases generally have no result for private space, the result will usually be governed by `unknownCountryPolicy`.
+`privateIPPolicy: lookup` sends these non-public addresses through the normal
+MMDB lookup path. Because public GeoLite databases generally have no result
+for them, the result will usually be governed by `unknownCountryPolicy`.
 
 ## Database startup behavior
 
@@ -31,7 +33,8 @@ The middleware exposes separate policies for conditions that do not produce a no
 The order is intentional:
 
 1. An exact or segment-safe prefix path whitelist can bypass every client-IP and database decision. This supports narrowly scoped health and ACME endpoints.
-2. Client IP is resolved. `invalidClientIPPolicy` applies if `RemoteAddr` itself is unusable.
+2. Client IP is resolved. `invalidClientIPPolicy` applies if `RemoteAddr` is
+   unusable or strict trusted-header parsing fails.
 3. A valid client IP or CIDR whitelist bypasses database availability and geography decisions.
 4. `databaseFailurePolicy` applies if no runtime database exists.
 5. A cached normal geography decision is used when present.
@@ -53,6 +56,7 @@ invalidClientIPPolicy: deny
 unknownCountryPolicy: deny
 unknownSubdivisionPolicy: deny
 privateIPPolicy: deny
+rejectInvalidClientIPHeaders: true
 ```
 
 This posture favors enforcement availability over application availability. A less strict service can independently choose `allow` for lookup/unknown cases without changing header trust or database startup behavior.

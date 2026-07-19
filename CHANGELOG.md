@@ -7,6 +7,36 @@ Versioning for released tags.
 
 ### Breaking
 
+- `clientIPHeaders` now defaults to only `X-Forwarded-For`; Cloudflare,
+  True-Client-IP, RFC `Forwarded`, X-Real-IP, and custom headers are opt-in.
+- Present-but-invalid headers from trusted peers are rejected by default via
+  the new `rejectInvalidClientIPHeaders` setting and `invalidClientIPPolicy`.
+- `invalidClientIPPolicy` and `privateIPPolicy` now default to `deny`.
+- `logLevel` now defaults to `info` and records deny decisions.
+
+### Added
+
+- Privacy-safe warnings for malformed trusted client-IP headers.
+- Link-local and unspecified client addresses are governed by
+  `privateIPPolicy`.
+- Concurrent reload regression coverage and serial/parallel snapshot
+  benchmarks.
+
+### Fixed
+
+- Requests no longer queue behind full MMDB reads during an atomic database
+  reload; one request performs the reload while others retain the current
+  immutable reader. Atomic deadlines and immutable snapshot publication also
+  remove steady-state reload/reader locks from the request path.
+- MMDB lookup errors remain available in logs even when client-IP logging is
+  disabled.
+- IP whitelist checks use the already parsed address instead of reparsing its
+  string representation.
+
+## v2.0.0-alpha - 2026-07-19
+
+### Breaking
+
 - Forwarding headers are trusted only from configured `trustedProxyCIDRs`;
   without trusted peers, the middleware uses `RemoteAddr`.
 - `whitelistedPaths` now matches exact normalized paths. Move existing prefix

@@ -58,7 +58,7 @@ func parsePolicySet(config *Config) (policySet, error) {
 	invalidClientIP, err := parseDecisionPolicy(
 		"invalidClientIPPolicy",
 		config.InvalidClientIPPolicy,
-		decisionPolicyAllow,
+		decisionPolicyDeny,
 	)
 	if err != nil {
 		return policySet{}, err
@@ -140,11 +140,11 @@ func parseDecisionPolicy(fieldName, rawPolicy string, defaultPolicy decisionPoli
 func parsePrivateIPPolicy(rawPolicy string) (privateIPPolicy, error) {
 	policy := strings.ToLower(strings.TrimSpace(rawPolicy))
 	switch policy {
-	case "", "allow":
+	case "allow":
 		return privateIPPolicyAllow, nil
 	case "lookup":
 		return privateIPPolicyLookup, nil
-	case "deny":
+	case "", "deny":
 		return privateIPPolicyDeny, nil
 	default:
 		return privateIPPolicyUnknown, fmt.Errorf(

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/oschwald/maxminddb-golang"
@@ -33,14 +34,13 @@ type databaseSnapshot struct {
 type databaseManager struct {
 	path string
 
-	readerMutex sync.RWMutex
-	reader      geoDatabase
-	fingerprint databaseFingerprint
-	version     uint64
+	snapshotValue atomic.Value
+	fingerprint   databaseFingerprint
+	version       uint64
 
-	reloadMutex    sync.Mutex
-	reloadInterval time.Duration
-	nextCheck      time.Time
+	reloadMutex       sync.Mutex
+	reloadInterval    time.Duration
+	nextCheckUnixNano atomic.Int64
 
 	now  func() time.Time
 	stat func(string) (os.FileInfo, error)
@@ -124,23 +124,26 @@ func (m *databaseManager) ensureLoaded() error {
 
 func (m *databaseManager) snapshot() (databaseSnapshot, error) {
 	reloadErr := m.reloadIfNeeded()
-
-	m.readerMutex.RLock()
-	snapshot := databaseSnapshot{
-		reader:  m.reader,
-		version: m.version,
-	}
-	m.readerMutex.RUnlock()
-
-	return snapshot, reloadErr
+	return m.currentSnapshot(), reloadErr
 }
 
 func (m *databaseManager) reloadIfNeeded() error {
-	m.reloadMutex.Lock()
+	now := m.now()
+	if now.UnixNano() < m.nextCheckUnixNano.Load() {
+		return nil
+	}
+
+	// A reload may read and parse the complete MMDB. Requests that lose this
+	// non-blocking election keep using the last known-good immutable reader.
+	if !m.reloadMutex.TryLock() {
+		return nil
+	}
 	defer m.reloadMutex.Unlock()
 
-	now := m.now()
-	if now.Before(m.nextCheck) {
+	// Another request may have completed the check between the atomic fast path
+	// and this request winning the election.
+	now = m.now()
+	if now.UnixNano() < m.nextCheckUnixNano.Load() {
 		return nil
 	}
 
@@ -148,7 +151,7 @@ func (m *databaseManager) reloadIfNeeded() error {
 }
 
 func (m *databaseManager) reloadLocked(now time.Time) error {
-	m.nextCheck = now.Add(m.reloadInterval)
+	m.nextCheckUnixNano.Store(now.Add(m.reloadInterval).UnixNano())
 
 	fileInfo, err := m.stat(m.path)
 	if err != nil {
@@ -159,10 +162,9 @@ func (m *databaseManager) reloadLocked(now time.Time) error {
 		modTime: fileInfo.ModTime(),
 	}
 
-	m.readerMutex.RLock()
-	hasCurrentReader := m.reader != nil
+	current := m.currentSnapshot()
+	hasCurrentReader := current.reader != nil
 	isCurrent := hasCurrentReader && m.fingerprint.equal(fingerprint)
-	m.readerMutex.RUnlock()
 	if isCurrent {
 		return nil
 	}
@@ -175,23 +177,26 @@ func (m *databaseManager) reloadLocked(now time.Time) error {
 		return fmt.Errorf("open updated geoip database: reader is nil")
 	}
 
-	// Readers are immutable after construction. Retaining a snapshot pointer is
-	// safe while this swap occurs; the pure-Go reader is reclaimed after the last
-	// in-flight request releases its snapshot.
-	m.readerMutex.Lock()
-	m.reader = reader
+	// Readers are immutable after construction. Publishing one complete snapshot
+	// atomically lets in-flight requests retain the old reader without a read lock.
 	m.fingerprint = fingerprint
 	m.version++
-	m.readerMutex.Unlock()
+	m.snapshotValue.Store(databaseSnapshot{reader: reader, version: m.version})
 
 	return nil
 }
 
 func (m *databaseManager) hasReader() bool {
-	m.readerMutex.RLock()
-	hasReader := m.reader != nil
-	m.readerMutex.RUnlock()
-	return hasReader
+	return m.currentSnapshot().reader != nil
+}
+
+func (m *databaseManager) currentSnapshot() databaseSnapshot {
+	value := m.snapshotValue.Load()
+	if value == nil {
+		return databaseSnapshot{}
+	}
+
+	return value.(databaseSnapshot)
 }
 
 func (m *databaseManager) useReloadInterval(interval time.Duration) {
@@ -203,7 +208,7 @@ func (m *databaseManager) useReloadInterval(interval time.Duration) {
 	}
 
 	m.reloadInterval = interval
-	m.nextCheck = time.Time{}
+	m.nextCheckUnixNano.Store(0)
 }
 
 func (f databaseFingerprint) equal(other databaseFingerprint) bool {

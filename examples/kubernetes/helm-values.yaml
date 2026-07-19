@@ -18,6 +18,16 @@ additionalVolumeMounts:
     mountPath: /data/geolite
     readOnly: true
 
+# Read-only audit baseline: 91-98Mi in use, 192Mi requested, 512Mi limited
+# before this plugin was enabled. 320Mi leaves canary scheduling headroom for
+# the in-memory MMDB, an overlapping reload, cache entries, and GC variance.
+resources:
+  requests:
+    cpu: 500m
+    memory: 320Mi
+  limits:
+    memory: 512Mi
+
 ports:
   websecure:
     forwardedHeaders:

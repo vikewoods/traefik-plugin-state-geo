@@ -18,8 +18,9 @@ var (
 
 func BenchmarkClientIPResolver(b *testing.B) {
 	resolver, err := newClientIPResolver(
-		CreateConfig().ClientIPHeaders,
+		[]string{"CF-Connecting-IP"},
 		[]string{"10.17.1.0/24"},
+		true,
 	)
 	if err != nil {
 		b.Fatalf("newClientIPResolver() error = %v", err)
@@ -69,4 +70,37 @@ func BenchmarkGeoLookup(b *testing.B) {
 			b.Fatalf("Lookup() error = %v", err)
 		}
 	}
+}
+
+func BenchmarkDatabaseSnapshot(b *testing.B) {
+	now := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
+	manager := newDatabaseManager("/data/GeoLite2-City.mmdb", time.Minute)
+	manager.now = func() time.Time { return now }
+	manager.snapshotValue.Store(databaseSnapshot{
+		reader:  &fakeGeoDatabase{generation: 1},
+		version: 1,
+	})
+	manager.nextCheckUnixNano.Store(now.Add(time.Hour).UnixNano())
+
+	b.Run("serial", func(b *testing.B) {
+		b.ReportAllocs()
+		for iteration := 0; iteration < b.N; iteration++ {
+			snapshot, err := manager.snapshot()
+			if err != nil || snapshot.reader == nil {
+				b.Fatalf("snapshot() = %#v, %v", snapshot, err)
+			}
+		}
+	})
+
+	b.Run("parallel", func(b *testing.B) {
+		b.ReportAllocs()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				snapshot, err := manager.snapshot()
+				if err != nil || snapshot.reader == nil {
+					b.Fatalf("snapshot() = %#v, %v", snapshot, err)
+				}
+			}
+		})
+	})
 }

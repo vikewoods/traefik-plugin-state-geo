@@ -41,7 +41,9 @@ Traefik also has a separate entry-point setting,
 so the node CIDR must be trusted and upstream header sanitization remains part
 of the security boundary.
 
-The safe default config trusts no proxy. See
+The safe default config trusts no proxy, enables only `X-Forwarded-For`,
+rejects malformed trusted headers, and denies unresolved or non-public client
+addresses. Provider-specific headers are opt-in. See
 [Client IP resolution](docs/client-ip-resolution.md) for the full algorithm and
 the Traefik-specific `X-Real-IP` behavior.
 
@@ -79,14 +81,13 @@ spec:
     stateGeoBlock:
       dbPath: /data/geolite/GeoLite2-City.mmdb
       databaseReloadInterval: 1m
+      cacheSize: 50000
+      cacheTTL: 15m
       trustedProxyCIDRs:
         - 10.17.1.0/24
       clientIPHeaders:
-        - CF-Connecting-IP
-        - True-Client-IP
         - X-Forwarded-For
-        - Forwarded
-        - X-Real-IP
+      rejectInvalidClientIPHeaders: true
       blockNonUS: true
       blockUSStates: true
       blockedStates: [CA, NY]
@@ -96,6 +97,8 @@ spec:
       unknownCountryPolicy: deny
       unknownSubdivisionPolicy: deny
       privateIPPolicy: deny
+      logLevel: info
+      logClientIP: false
       whitelistedPaths:
         - /health
       whitelistedPathPrefixes:
@@ -113,10 +116,11 @@ canary instructions are in [Kubernetes deployment](docs/kubernetes.md).
 | --- | --- | --- |
 | `dbPath` | empty | Path inside the Traefik container to a MaxMind City MMDB. |
 | `databaseReloadInterval` | `1m` | Minimum interval between request-driven file replacement checks; minimum `1s`. |
-| `cacheSize` | `1000` | Per-Middleware LRU entry bound; `0` disables, maximum `100000`. |
+| `cacheSize` | `1000` | Per-Middleware exact-IP LRU entry bound; `0` disables, maximum `100000`. High-cardinality ingress can start near `50000` and tune from memory/hit-rate evidence. |
 | `cacheTTL` | `15m` | Positive decision TTL when caching is enabled. |
-| `clientIPHeaders` | CF, True Client, XFF, Forwarded, X-Real | Ordered trusted client-IP sources. |
+| `clientIPHeaders` | XFF | Ordered trusted client-IP sources. Cloudflare, True Client IP, Forwarded, X-Real-IP, and custom headers are opt-in. |
 | `trustedProxyCIDRs` | empty | Immediate peers permitted to supply client-IP headers. |
+| `rejectInvalidClientIPHeaders` | `true` | Send a present-but-invalid trusted header to `invalidClientIPPolicy`; `false` warns and tries the next source. |
 | `blockNonUS` | `true` | Deny known non-US countries. |
 | `blockUSStates` | `true` | Apply `blockedStates` and unknown-subdivision policy to US records. |
 | `blockedStates` | empty | Two-letter US subdivision codes to deny, normalized to uppercase. |
@@ -127,11 +131,11 @@ canary instructions are in [Kubernetes deployment](docs/kubernetes.md).
 | `templatePath` | empty | Mounted HTML template path; mutually exclusive with `templateHTML`. |
 | `databaseFailurePolicy` | `legacy` | `allow`, `deny`, `error`, or deprecated compatibility mode `legacy`. |
 | `lookupFailurePolicy` | `allow` | `allow` or `deny` when an MMDB lookup returns an error. |
-| `invalidClientIPPolicy` | `allow` | `allow` or `deny` when `RemoteAddr` is unusable. |
+| `invalidClientIPPolicy` | `deny` | `allow` or `deny` when `RemoteAddr` or a strict trusted header is unusable. |
 | `unknownCountryPolicy` | `allow` | `allow` or `deny` when lookup returns no country. |
 | `unknownSubdivisionPolicy` | `deny` | `allow` or `deny` for a US record without a subdivision. |
-| `privateIPPolicy` | `allow` | `allow`, `lookup`, or `deny` for private/loopback clients. |
-| `logLevel` | `warn` | `off`, `error`, `warn`, `info`, or `debug`. |
+| `privateIPPolicy` | `deny` | `allow`, `lookup`, or `deny` for private, loopback, link-local, or unspecified clients. |
+| `logLevel` | `info` | `off`, `error`, `warn`, `info`, or `debug`; info records deny decisions without client IPs by default. |
 | `logClientIP` | `false` | Include resolved client IPs in structured logs. |
 | `failOpen` | `true` | Deprecated bridge used only by `databaseFailurePolicy: legacy`. |
 
@@ -155,7 +159,8 @@ successful swap.
 
 Published v1 configurations require migration because trusted headers, path
 prefixes, invalid rules, failure policies, and bundled data behavior changed.
-Read [Migration from v1](docs/migration-v1.md) before upgrading.
+The beta candidate also hardens several `v2.0.0-alpha` defaults. Read
+[Migration from v1](docs/migration-v1.md) before upgrading.
 
 ```bash
 go test ./...

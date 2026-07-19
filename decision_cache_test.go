@@ -59,6 +59,15 @@ func TestDisabledDecisionCacheDoesNotStoreEntries(t *testing.T) {
 	}
 }
 
+func TestDecisionCacheKeepsDistinctIPv6Addresses(t *testing.T) {
+	cache := newDecisionCache(2, time.Minute)
+	cache.set("2001:db8:abcd:1::1", 1, cacheEntry{allowed: true})
+
+	if _, found := cache.get("2001:db8:abcd:1::2", 1); found {
+		t.Fatal("distinct IPv6 address unexpectedly shared a cached decision")
+	}
+}
+
 func TestDecisionCacheRejectsInvalidConfiguration(t *testing.T) {
 	tests := []struct {
 		name string

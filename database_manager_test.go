@@ -124,6 +124,80 @@ func TestDatabaseManagerKeepsLastGoodReaderWhenReloadFails(t *testing.T) {
 	}
 }
 
+func TestDatabaseManagerSnapshotDoesNotBlockDuringReload(t *testing.T) {
+	now := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
+	fileInfo := fakeDatabaseFileInfo{size: 100, modTime: now}
+	reloadStarted := make(chan struct{})
+	releaseReload := make(chan struct{})
+	openCount := 0
+
+	manager := newDatabaseManager("/data/GeoLite2-City.mmdb", time.Minute)
+	manager.now = func() time.Time { return now }
+	manager.stat = func(_ string) (os.FileInfo, error) { return fileInfo, nil }
+	manager.open = func(_ string) (geoDatabase, error) {
+		openCount++
+		if openCount == 2 {
+			close(reloadStarted)
+			<-releaseReload
+		}
+		return &fakeGeoDatabase{generation: openCount}, nil
+	}
+
+	if err := manager.ensureLoaded(); err != nil {
+		t.Fatalf("ensureLoaded() error = %v", err)
+	}
+	now = now.Add(time.Minute)
+	fileInfo = fakeDatabaseFileInfo{size: 101, modTime: now}
+
+	type snapshotResult struct {
+		snapshot databaseSnapshot
+		err      error
+	}
+	reloadResult := make(chan snapshotResult, 1)
+	go func() {
+		snapshot, err := manager.snapshot()
+		reloadResult <- snapshotResult{snapshot: snapshot, err: err}
+	}()
+
+	select {
+	case <-reloadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reload did not reach the blocked open")
+	}
+
+	fastResult := make(chan snapshotResult, 1)
+	go func() {
+		snapshot, err := manager.snapshot()
+		fastResult <- snapshotResult{snapshot: snapshot, err: err}
+	}()
+
+	var fast snapshotResult
+	fastTimedOut := false
+	select {
+	case fast = <-fastResult:
+	case <-time.After(250 * time.Millisecond):
+		fastTimedOut = true
+	}
+
+	close(releaseReload)
+	reloaded := <-reloadResult
+	if fastTimedOut {
+		t.Fatal("snapshot blocked behind an in-progress database reload")
+	}
+	if fast.err != nil {
+		t.Fatalf("non-blocking snapshot() error = %v", fast.err)
+	}
+	if fast.snapshot.version != 1 {
+		t.Fatalf("non-blocking snapshot version = %d, want last-good version 1", fast.snapshot.version)
+	}
+	if reloaded.err != nil {
+		t.Fatalf("reloading snapshot() error = %v", reloaded.err)
+	}
+	if reloaded.snapshot.version != 2 {
+		t.Fatalf("reloaded snapshot version = %d, want 2", reloaded.snapshot.version)
+	}
+}
+
 func TestDatabaseManagerRecoversAfterInitialLoadFailure(t *testing.T) {
 	now := time.Date(2026, time.July, 18, 20, 0, 0, 0, time.UTC)
 	fileInfo := fakeDatabaseFileInfo{size: 100, modTime: now}

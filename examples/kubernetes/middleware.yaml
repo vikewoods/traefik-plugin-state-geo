@@ -8,16 +8,15 @@ spec:
     stateGeoBlock:
       dbPath: /data/geolite/GeoLite2-City.mmdb
       databaseReloadInterval: 1m
-      cacheSize: 1000
+      # Starting point for an ingress handling many unique IPv4/IPv6 clients.
+      # Tune from observed cache effectiveness and pod memory.
+      cacheSize: 50000
       cacheTTL: 15m
       trustedProxyCIDRs:
         - 10.17.1.0/24
       clientIPHeaders:
-        - CF-Connecting-IP
-        - True-Client-IP
         - X-Forwarded-For
-        - Forwarded
-        - X-Real-IP
+      rejectInvalidClientIPHeaders: true
       blockNonUS: true
       blockUSStates: true
       blockedStates:
@@ -33,5 +32,5 @@ spec:
         - /health
       whitelistedPathPrefixes:
         - /.well-known
-      logLevel: warn
+      logLevel: info
       logClientIP: false

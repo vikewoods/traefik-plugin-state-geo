@@ -12,63 +12,59 @@ import (
 
 // Config defines the State Geo Block middleware configuration.
 type Config struct {
-	BlockedStates            []string `json:"blockedStates,omitempty"`
-	WhitelistedIPs           []string `json:"whitelistedIPs,omitempty"`
-	WhitelistedPaths         []string `json:"whitelistedPaths,omitempty"`
-	WhitelistedPathPrefixes  []string `json:"whitelistedPathPrefixes,omitempty"`
-	ClientIPHeaders          []string `json:"clientIPHeaders,omitempty"`
-	TrustedProxyCIDRs        []string `json:"trustedProxyCIDRs,omitempty"`
-	DBPath                   string   `json:"dbPath,omitempty"`
-	DatabaseReloadInterval   string   `json:"databaseReloadInterval,omitempty"`
-	CacheSize                int      `json:"cacheSize,omitempty"`
-	CacheTTL                 string   `json:"cacheTTL,omitempty"`
-	TemplatePath             string   `json:"templatePath,omitempty"`
-	TemplateHTML             string   `json:"templateHTML,omitempty"`
-	DatabaseFailurePolicy    string   `json:"databaseFailurePolicy,omitempty"`
-	LookupFailurePolicy      string   `json:"lookupFailurePolicy,omitempty"`
-	InvalidClientIPPolicy    string   `json:"invalidClientIPPolicy,omitempty"`
-	UnknownCountryPolicy     string   `json:"unknownCountryPolicy,omitempty"`
-	UnknownSubdivisionPolicy string   `json:"unknownSubdivisionPolicy,omitempty"`
-	PrivateIPPolicy          string   `json:"privateIPPolicy,omitempty"`
-	LogLevel                 string   `json:"logLevel,omitempty"`
-	LogClientIP              bool     `json:"logClientIP,omitempty"`
-	FailOpen                 bool     `json:"failOpen,omitempty"` // Deprecated: use DatabaseFailurePolicy.
-	BlockNonUS               bool     `json:"blockNonUS,omitempty"`
-	BlockUSStates            bool     `json:"blockUSStates,omitempty"`
+	BlockedStates                []string `json:"blockedStates,omitempty"`
+	WhitelistedIPs               []string `json:"whitelistedIPs,omitempty"`
+	WhitelistedPaths             []string `json:"whitelistedPaths,omitempty"`
+	WhitelistedPathPrefixes      []string `json:"whitelistedPathPrefixes,omitempty"`
+	ClientIPHeaders              []string `json:"clientIPHeaders,omitempty"`
+	TrustedProxyCIDRs            []string `json:"trustedProxyCIDRs,omitempty"`
+	RejectInvalidClientIPHeaders bool     `json:"rejectInvalidClientIPHeaders,omitempty"`
+	DBPath                       string   `json:"dbPath,omitempty"`
+	DatabaseReloadInterval       string   `json:"databaseReloadInterval,omitempty"`
+	CacheSize                    int      `json:"cacheSize,omitempty"`
+	CacheTTL                     string   `json:"cacheTTL,omitempty"`
+	TemplatePath                 string   `json:"templatePath,omitempty"`
+	TemplateHTML                 string   `json:"templateHTML,omitempty"`
+	DatabaseFailurePolicy        string   `json:"databaseFailurePolicy,omitempty"`
+	LookupFailurePolicy          string   `json:"lookupFailurePolicy,omitempty"`
+	InvalidClientIPPolicy        string   `json:"invalidClientIPPolicy,omitempty"`
+	UnknownCountryPolicy         string   `json:"unknownCountryPolicy,omitempty"`
+	UnknownSubdivisionPolicy     string   `json:"unknownSubdivisionPolicy,omitempty"`
+	PrivateIPPolicy              string   `json:"privateIPPolicy,omitempty"`
+	LogLevel                     string   `json:"logLevel,omitempty"`
+	LogClientIP                  bool     `json:"logClientIP,omitempty"`
+	FailOpen                     bool     `json:"failOpen,omitempty"` // Deprecated: use DatabaseFailurePolicy.
+	BlockNonUS                   bool     `json:"blockNonUS,omitempty"`
+	BlockUSStates                bool     `json:"blockUSStates,omitempty"`
 }
 
 // CreateConfig returns the middleware's documented default configuration.
 func CreateConfig() *Config {
 	return &Config{
-		BlockedStates:           []string{},
-		WhitelistedIPs:          []string{},
-		WhitelistedPaths:        []string{},
-		WhitelistedPathPrefixes: []string{},
-		ClientIPHeaders: []string{
-			"CF-Connecting-IP",
-			"True-Client-IP",
-			"X-Forwarded-For",
-			"Forwarded",
-			"X-Real-IP",
-		},
-		TrustedProxyCIDRs:        []string{},
-		DBPath:                   "",
-		DatabaseReloadInterval:   defaultDatabaseReloadInterval.String(),
-		CacheSize:                defaultDecisionCacheSize,
-		CacheTTL:                 defaultDecisionCacheTTL.String(),
-		TemplatePath:             "",
-		TemplateHTML:             "",
-		DatabaseFailurePolicy:    "legacy",
-		LookupFailurePolicy:      "allow",
-		InvalidClientIPPolicy:    "allow",
-		UnknownCountryPolicy:     "allow",
-		UnknownSubdivisionPolicy: "deny",
-		PrivateIPPolicy:          "allow",
-		LogLevel:                 "warn",
-		LogClientIP:              false,
-		FailOpen:                 true,
-		BlockNonUS:               true,
-		BlockUSStates:            true,
+		BlockedStates:                []string{},
+		WhitelistedIPs:               []string{},
+		WhitelistedPaths:             []string{},
+		WhitelistedPathPrefixes:      []string{},
+		ClientIPHeaders:              []string{"X-Forwarded-For"},
+		TrustedProxyCIDRs:            []string{},
+		RejectInvalidClientIPHeaders: true,
+		DBPath:                       "",
+		DatabaseReloadInterval:       defaultDatabaseReloadInterval.String(),
+		CacheSize:                    defaultDecisionCacheSize,
+		CacheTTL:                     defaultDecisionCacheTTL.String(),
+		TemplatePath:                 "",
+		TemplateHTML:                 "",
+		DatabaseFailurePolicy:        "legacy",
+		LookupFailurePolicy:          "allow",
+		InvalidClientIPPolicy:        "deny",
+		UnknownCountryPolicy:         "allow",
+		UnknownSubdivisionPolicy:     "deny",
+		PrivateIPPolicy:              "deny",
+		LogLevel:                     "info",
+		LogClientIP:                  false,
+		FailOpen:                     true,
+		BlockNonUS:                   true,
+		BlockUSStates:                true,
 	}
 }
 
@@ -125,10 +121,15 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		return nil, fmt.Errorf("configure decision policies: %w", err)
 	}
 
-	clientIPResolver, err := newClientIPResolver(config.ClientIPHeaders, config.TrustedProxyCIDRs)
+	clientIPResolver, err := newClientIPResolver(
+		config.ClientIPHeaders,
+		config.TrustedProxyCIDRs,
+		config.RejectInvalidClientIPHeaders,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("configure client IP resolver: %w", err)
 	}
+	clientIPResolver.logger = logger
 
 	reloadInterval, err := parseDatabaseReloadInterval(config.DatabaseReloadInterval)
 	if err != nil {
@@ -284,12 +285,7 @@ func (a *stateBlock) isPathWhitelisted(reqPath string) bool {
 	return false
 }
 
-func (a *stateBlock) isIPWhitelisted(ipStr string) bool {
-	ip, err := netip.ParseAddr(strings.TrimSpace(ipStr))
-	if err != nil {
-		return false
-	}
-
+func (a *stateBlock) isIPWhitelisted(ip netip.Addr) bool {
 	ip = ip.Unmap()
 	if _, ok := a.whitelistedIPs[ip]; ok {
 		return true
@@ -323,7 +319,7 @@ func (a *stateBlock) serveBlocked(
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(http.StatusForbidden)
 
-	a.logger.debug(
+	a.logger.info(
 		req.Context(),
 		"request denied by geo policy",
 		clientIP,
@@ -387,7 +383,7 @@ func (a *stateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	ipStr := clientIP.addr.String()
 
 	// Apply the static IP/CIDR whitelist before GeoIP evaluation.
-	if a.isIPWhitelisted(ipStr) {
+	if a.isIPWhitelisted(clientIP.addr) {
 		a.logger.debug(req.Context(), "client ip is whitelisted", ipStr)
 		a.next.ServeHTTP(rw, req)
 		return
@@ -440,10 +436,10 @@ func (a *stateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	stateCode := ""
 
 	ip := net.IP(clientIP.addr.AsSlice())
-	if ip.IsPrivate() || ip.IsLoopback() {
+	if isPolicyControlledNonPublicAddress(clientIP.addr) {
 		switch a.policies.privateIP {
 		case privateIPPolicyAllow:
-			a.logger.debug(req.Context(), "private or loopback client ip allowed by policy", ipStr)
+			a.logger.debug(req.Context(), "non-public client ip allowed by policy", ipStr)
 			a.next.ServeHTTP(rw, req)
 			return
 		case privateIPPolicyDeny:
@@ -456,11 +452,12 @@ func (a *stateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	countryCode, subdivisionCode, err := a.resolveGeo(ip, snapshot.reader)
 	if err != nil {
-		attrs := []slog.Attr{}
-		if a.logger.includeClientIP {
-			attrs = append(attrs, slog.Any("error", err))
-		}
-		a.logger.error(req.Context(), "geoip lookup failed", ipStr, attrs...)
+		a.logger.error(
+			req.Context(),
+			"geoip lookup failed",
+			ipStr,
+			slog.Any("error", err),
+		)
 		a.servePolicyDecision(rw, req, a.policies.lookupFailure, ipStr)
 		return
 	}
@@ -519,6 +516,15 @@ func (a *stateBlock) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		slog.String("state", stateCode),
 	)
 	a.next.ServeHTTP(rw, req)
+}
+
+func isPolicyControlledNonPublicAddress(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return addr.IsPrivate() ||
+		addr.IsLoopback() ||
+		addr.IsLinkLocalUnicast() ||
+		addr.IsLinkLocalMulticast() ||
+		addr.IsUnspecified()
 }
 
 func (a *stateBlock) servePolicyDecision(

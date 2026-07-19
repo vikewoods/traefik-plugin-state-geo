@@ -7,19 +7,15 @@ Geo decisions and IP whitelists are only as reliable as the address selected for
 
 ## Secure default
 
-`CreateConfig` knows the following sources, in order:
+`CreateConfig` enables only `X-Forwarded-For`. Cloudflare headers, RFC 7239
+`Forwarded`, `X-Real-IP`, and custom single-IP headers remain supported but are
+opt-in because an ordinary load balancer may pass an attacker-supplied
+provider header unchanged.
 
-1. `CF-Connecting-IP`
-2. `True-Client-IP`
-3. `X-Forwarded-For`
-4. RFC 7239 `Forwarded`
-5. `X-Real-IP`
-
-Traefik normally rewrites `X-Real-IP` to the immediate peer before middleware
-execution, so it is intentionally last by default. It remains configurable
-for installations that deliberately preserve or populate it differently.
-
-`trustedProxyCIDRs` is empty by default. Consequently, a default configuration ignores every forwarding header and uses the socket peer from `RemoteAddr`. This prevents a direct client from opting into a different geography by sending its own `CF-Connecting-IP` or `X-Forwarded-For` value.
+`trustedProxyCIDRs` is empty by default. Consequently, a default configuration
+ignores XFF and uses the socket peer from `RemoteAddr`. Present-but-invalid
+headers from a trusted peer are rejected by default and are handled by
+`invalidClientIPPolicy`, whose default is `deny`.
 
 Any syntactically valid custom header can be placed in `clientIPHeaders`. Custom headers are treated as single-IP values. For example, a deployment could select `Fly-Client-IP` without requiring a plugin code change.
 
@@ -42,11 +38,8 @@ spec:
       trustedProxyCIDRs:
         - 10.17.1.0/24
       clientIPHeaders:
-        - CF-Connecting-IP
-        - True-Client-IP
         - X-Forwarded-For
-        - Forwarded
-        - X-Real-IP
+      rejectInvalidClientIPHeaders: true
 ```
 
 The node CIDR is cluster-specific and must be revalidated before deployment. Do not copy it into another cluster without checking that cluster's real socket peers.
@@ -58,8 +51,10 @@ The node CIDR is cluster-specific and must be revalidated before deployment. Do 
 3. If the peer is trusted, inspect `clientIPHeaders` in configured order.
 4. For a single-IP header, require exactly one unambiguous, valid address.
 5. For `X-Forwarded-For` and `Forwarded`, parse the complete chain and walk it from right to left. Select the first address outside the trusted proxy ranges. If every chain entry is trusted, use the leftmost entry.
-6. If a present source is malformed, try the next configured source.
-7. If no header produces an address, use the immediate socket peer.
+6. If a present source is malformed, emit a warning containing the header name
+   but not its value. With `rejectInvalidClientIPHeaders: true`, stop and apply
+   `invalidClientIPPolicy`; with `false`, try the next configured source.
+7. If every configured source is absent, use the immediate socket peer.
 
 IPv4-mapped IPv6 addresses are normalized to IPv4. Bracketed IPv6 and common address-with-port forms are supported. Scoped IPv6 zone identifiers are rejected because they are not meaningful as an Internet client identity.
 
@@ -73,7 +68,12 @@ The resolver prevents header spoofing from an untrusted socket peer, but the dep
 - an upstream trusted component removes and regenerates the selected header;
 - distinct entry points or routers use source restrictions appropriate to their ingress path.
 
-Cloudflare's `CF-Connecting-IP` stays first because it gives the most direct client identity on Cloudflare routes and avoids relying on a longer `X-Forwarded-For` chain. On non-Cloudflare routes, omit it from `clientIPHeaders` if the upstream cannot guarantee that it is overwritten or removed.
+Do not add `CF-Connecting-IP` or `True-Client-IP` to a shared Middleware merely
+because some routes use Cloudflare. Provider headers are safe only on a route
+where the upstream guarantees that direct clients cannot preserve or inject
+them. Cloudflare documents `True-Client-IP` as an Enterprise-only equivalent
+of `CF-Connecting-IP`; it should not be enabled unless that transform is
+actually configured.
 
 ## Operational examples
 
@@ -83,6 +83,7 @@ Cloudflare-only route:
 clientIPHeaders:
   - CF-Connecting-IP
   - X-Forwarded-For
+rejectInvalidClientIPHeaders: true
 trustedProxyCIDRs:
   - 10.17.1.0/24
 ```
@@ -92,8 +93,7 @@ Generic reverse proxy route:
 ```yaml
 clientIPHeaders:
   - X-Forwarded-For
-  - Forwarded
-  - X-Real-IP
+rejectInvalidClientIPHeaders: true
 trustedProxyCIDRs:
   - 10.17.1.0/24
 ```
@@ -103,6 +103,10 @@ Direct traffic with no trusted proxy:
 ```yaml
 clientIPHeaders: []
 trustedProxyCIDRs: []
+rejectInvalidClientIPHeaders: true
 ```
 
-The explicit empty lists force `RemoteAddr` and are useful for a route where the original socket peer is preserved.
+The explicit empty lists force `RemoteAddr` and are useful for a route where
+the original socket peer is preserved. Traefik normally rewrites `X-Real-IP`
+to its immediate peer before middleware execution, so only opt into that
+header when another verified component deliberately sets it to the client.

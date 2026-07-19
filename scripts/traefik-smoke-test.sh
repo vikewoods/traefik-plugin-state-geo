@@ -88,7 +88,7 @@ assert_status 200 true_client_ip_allowed \
   --header 'True-Client-IP: 216.160.83.56'
 assert_status 200 x_forwarded_for_allowed \
   --header 'X-Forwarded-For: 216.160.83.56, 10.17.1.20'
-assert_status 200 malformed_cf_falls_back_to_xff \
+assert_status 403 malformed_cf_is_rejected \
   --header 'CF-Connecting-IP: not-an-ip' \
   --header 'X-Forwarded-For: 216.160.83.56, 10.17.1.20'
 assert_status 403 missing_client_header_denied

@@ -15,17 +15,19 @@ func TestClientIPResolverResolve(t *testing.T) {
 	defaultHeaders := CreateConfig().ClientIPHeaders
 
 	tests := []struct {
-		name           string
-		headerNames    []string
-		trusted        []string
-		remoteAddr     string
-		headers        []testHeaderValue
-		expectedAddr   string
-		expectedSource string
+		name                 string
+		headerNames          []string
+		trusted              []string
+		rejectInvalidHeaders bool
+		remoteAddr           string
+		headers              []testHeaderValue
+		expectedAddr         string
+		expectedSource       string
+		expectsError         bool
 	}{
 		{
 			name:        "untrusted peer cannot spoof Cloudflare header",
-			headerNames: defaultHeaders,
+			headerNames: []string{"CF-Connecting-IP"},
 			trusted:     []string{"10.17.1.0/24"},
 			remoteAddr:  "198.51.100.10:443",
 			headers: []testHeaderValue{
@@ -36,7 +38,7 @@ func TestClientIPResolverResolve(t *testing.T) {
 		},
 		{
 			name:        "trusted peer supplies Cloudflare IPv4",
-			headerNames: defaultHeaders,
+			headerNames: []string{"CF-Connecting-IP"},
 			trusted:     []string{"10.17.1.0/24"},
 			remoteAddr:  "10.17.1.12:443",
 			headers: []testHeaderValue{
@@ -47,7 +49,7 @@ func TestClientIPResolverResolve(t *testing.T) {
 		},
 		{
 			name:        "trusted peer supplies Cloudflare IPv6",
-			headerNames: defaultHeaders,
+			headerNames: []string{"CF-Connecting-IP"},
 			trusted:     []string{"10.17.1.0/24"},
 			remoteAddr:  "10.17.1.12:443",
 			headers: []testHeaderValue{
@@ -58,7 +60,7 @@ func TestClientIPResolverResolve(t *testing.T) {
 		},
 		{
 			name:        "configured order gives Cloudflare priority",
-			headerNames: defaultHeaders,
+			headerNames: []string{"CF-Connecting-IP", "X-Forwarded-For", "X-Real-IP"},
 			trusted:     []string{"10.17.1.0/24"},
 			remoteAddr:  "10.17.1.12:443",
 			headers: []testHeaderValue{
@@ -82,8 +84,8 @@ func TestClientIPResolverResolve(t *testing.T) {
 			expectedSource: "X-Forwarded-For",
 		},
 		{
-			name:        "malformed higher priority header falls back to X-Real-IP",
-			headerNames: defaultHeaders,
+			name:        "permissive mode falls back after malformed higher priority header",
+			headerNames: []string{"CF-Connecting-IP", "X-Real-IP"},
 			trusted:     []string{"10.17.1.0/24"},
 			remoteAddr:  "10.17.1.12:443",
 			headers: []testHeaderValue{
@@ -94,8 +96,20 @@ func TestClientIPResolverResolve(t *testing.T) {
 			expectedSource: "X-Real-Ip",
 		},
 		{
-			name:        "ambiguous single-IP header falls back to X-Forwarded-For",
-			headerNames: defaultHeaders,
+			name:                 "strict mode rejects malformed trusted header",
+			headerNames:          []string{"CF-Connecting-IP", "X-Forwarded-For"},
+			trusted:              []string{"10.17.1.0/24"},
+			rejectInvalidHeaders: true,
+			remoteAddr:           "10.17.1.12:443",
+			headers: []testHeaderValue{
+				{name: "CF-Connecting-IP", value: "not-an-address"},
+				{name: "X-Forwarded-For", value: "198.51.100.25"},
+			},
+			expectsError: true,
+		},
+		{
+			name:        "permissive mode falls back after ambiguous single-IP header",
+			headerNames: []string{"CF-Connecting-IP", "X-Forwarded-For"},
 			trusted:     []string{"10.17.1.0/24"},
 			remoteAddr:  "10.17.1.12:443",
 			headers: []testHeaderValue{
@@ -187,7 +201,7 @@ func TestClientIPResolverResolve(t *testing.T) {
 			expectedSource: "X-Real-Ip",
 		},
 		{
-			name:        "malformed forwarding chain falls back to socket peer",
+			name:        "permissive mode falls back to socket peer after malformed chains",
 			headerNames: []string{"X-Forwarded-For", "Forwarded"},
 			trusted:     []string{"10.17.1.0/24"},
 			remoteAddr:  "10.17.1.12:443",
@@ -210,7 +224,11 @@ func TestClientIPResolverResolve(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			resolver, err := newClientIPResolver(test.headerNames, test.trusted)
+			resolver, err := newClientIPResolver(
+				test.headerNames,
+				test.trusted,
+				test.rejectInvalidHeaders,
+			)
 			if err != nil {
 				t.Fatalf("newClientIPResolver() error = %v", err)
 			}
@@ -222,6 +240,12 @@ func TestClientIPResolverResolve(t *testing.T) {
 			}
 
 			resolved, err := resolver.resolve(req)
+			if test.expectsError {
+				if err == nil {
+					t.Fatal("resolve() error = nil, want invalid trusted header error")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("resolve() error = %v", err)
 			}
@@ -273,7 +297,7 @@ func TestClientIPResolverRejectsInvalidConfiguration(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := newClientIPResolver(test.headerNames, test.trusted)
+			_, err := newClientIPResolver(test.headerNames, test.trusted, true)
 			if err == nil {
 				t.Fatal("newClientIPResolver() error = nil, want configuration error")
 			}
@@ -282,7 +306,12 @@ func TestClientIPResolverRejectsInvalidConfiguration(t *testing.T) {
 }
 
 func TestClientIPResolverRejectsInvalidRemoteAddr(t *testing.T) {
-	resolver, err := newClientIPResolver(CreateConfig().ClientIPHeaders, []string{"10.17.1.0/24"})
+	config := CreateConfig()
+	resolver, err := newClientIPResolver(
+		config.ClientIPHeaders,
+		[]string{"10.17.1.0/24"},
+		config.RejectInvalidClientIPHeaders,
+	)
 	if err != nil {
 		t.Fatalf("newClientIPResolver() error = %v", err)
 	}
