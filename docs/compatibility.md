@@ -2,7 +2,8 @@
 
 | Plugin line | Traefik runtime | Go for native checks | Status |
 | --- | --- | --- | --- |
-| v2.0.0-rc.1 | v3.7.1 and v3.7.6 / Yaegi | 1.23 minimum; current stable in CI | Release candidate; native and interpreted validation required before tagging |
+| v2.0.0-rc.2 | v3.7.1 and v3.7.6 / Yaegi | 1.23 minimum; current stable in CI | Current release candidate; native and interpreted validation required before tagging |
+| v2.0.0-rc.1 | v3.7.1 and v3.7.6 / Yaegi | 1.23 minimum; current stable in CI | Earlier release candidate; superseded by rc.2 |
 | v2.0.0-beta | v3.7.1 / Yaegi | 1.23 | Catalog indexed, but not downloadable because its Go module path omitted `/v2` |
 | v2.0.0-alpha | v3.7.1 / Yaegi | 1.23 | Published prerelease; superseded by the hardened release candidate |
 | v1.1.2 | Traefik v3-era local plugin deployment | 1.23 | Published legacy behavior; Kubernetes hardening is not present |

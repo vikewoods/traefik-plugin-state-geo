@@ -5,7 +5,7 @@ Use a released public plugin in Traefik's static configuration:
 ```yaml
 command:
   - --experimental.plugins.stateGeoBlock.modulename=github.com/vikewoods/traefik-plugin-state-geo/v2
-  - --experimental.plugins.stateGeoBlock.version=v2.0.0-rc.1
+  - --experimental.plugins.stateGeoBlock.version=v2.0.0-rc.2
 volumes:
   - /mnt/traefik/GeoLite2-City.mmdb:/data/geolite/GeoLite2-City.mmdb:ro
 ```

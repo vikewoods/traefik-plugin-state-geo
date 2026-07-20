@@ -34,7 +34,7 @@ experimental:
   plugins:
     stateGeoBlock:
       moduleName: github.com/vikewoods/traefik-plugin-state-geo/v2
-      version: v2.0.0-rc.1
+      version: v2.0.0-rc.2
 ```
 
 Do not reuse the unsuffixed module name from v1 or the earlier v2 prereleases.

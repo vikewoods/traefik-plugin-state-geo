@@ -5,6 +5,8 @@ Versioning for released tags.
 
 ## Unreleased
 
+## v2.0.0-rc.2 - 2026-07-20
+
 ### Added
 
 - Documented and tested native and Traefik-interpreted compatibility with

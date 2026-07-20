@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-release_version="${RELEASE_VERSION:-v2.0.0-rc.1}"
+release_version="${RELEASE_VERSION:-v2.0.0-rc.2}"
 module_name="$(awk 'NR == 1 && $1 == "module" { print $2 }' go.mod)"
 
 if [[ "${release_version}" =~ ^v([0-9]+)\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
