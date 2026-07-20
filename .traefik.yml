@@ -1,6 +1,7 @@
 displayName: State Geo Block Middleware
 type: middleware
-import: github.com/vikewoods/traefik-plugin-state-geo
+import: github.com/vikewoods/traefik-plugin-state-geo/v2
+basePkg: traefik_plugin_state_geo
 runtime: yaegi
 
 summary: Blocks non-US traffic and selected US states using a mounted MaxMind City database.

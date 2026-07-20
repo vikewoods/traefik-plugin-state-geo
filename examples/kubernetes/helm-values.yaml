@@ -1,11 +1,11 @@
 # Merge this fragment into the Traefik chart values.
-# Replace vX.Y.Z and every example network with values validated for the cluster.
+# Replace every example network with values validated for the cluster.
 experimental:
   abortOnPluginFailure: true
   plugins:
     stateGeoBlock:
-      moduleName: github.com/vikewoods/traefik-plugin-state-geo
-      version: vX.Y.Z
+      moduleName: github.com/vikewoods/traefik-plugin-state-geo/v2
+      version: v2.0.0-rc.1
 
 deployment:
   additionalVolumes:

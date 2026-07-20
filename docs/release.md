@@ -18,14 +18,18 @@ deploy a new tag until every required item below passes.
 - [ ] The public GitHub repository is not a fork and has the `traefik-plugin`
       topic.
 - [ ] `.traefik.yml` is at repository root and its `import` exactly matches
-      `go.mod` (`github.com/vikewoods/traefik-plugin-state-geo`).
+      `go.mod` (`github.com/vikewoods/traefik-plugin-state-geo/v2`).
 - [ ] `.traefik.yml` `testData` constructs the Middleware and opens the tiny
       deterministic database.
+- [ ] `.traefik.yml` `basePkg` matches the root Go package so the `/v2` suffix
+      is not treated as the Yaegi package identifier.
 - [ ] Dependencies are committed under `vendor/`.
 - [ ] The package exports `Config`, `CreateConfig`, and `New` with the required
       Traefik signatures.
 - [ ] The release tag uses semantic `vMAJOR.MINOR.PATCH` or
       `vMAJOR.MINOR.PATCH-PRERELEASE` form.
+- [ ] The release major matches the Go semantic-import suffix (`v2` uses
+      module and manifest path `/v2`).
 
 ## Verification
 
@@ -56,11 +60,14 @@ git diff --check
 ## Publish and observe
 
 1. Create and push the immutable annotated tag.
-2. Confirm the tag is available through the Go module proxy.
-3. Wait for the Traefik Plugin Catalog polling cycle.
-4. Check for an analyzer-created GitHub issue; fix the release with a new tag,
+2. Confirm the tag is available through the Go module proxy under
+   `github.com/vikewoods/traefik-plugin-state-geo/v2`.
+3. Confirm the exact tag returns HTTP 200 from Traefik's public download and
+   validation endpoints before changing a cluster.
+4. Wait for the Traefik Plugin Catalog polling cycle.
+5. Check for an analyzer-created GitHub issue; fix the release with a new tag,
    never by moving an existing tag.
-5. Confirm the catalog page shows the new version and current README.
-6. Enable the versioned tag on a controlled Traefik/Kubernetes canary.
-7. Complete the matrix in `docs/kubernetes.md`, observe memory/latency/errors,
+6. Confirm the catalog page shows the new version and current README.
+7. Enable the versioned tag on a controlled Traefik/Kubernetes canary.
+8. Complete the matrix in `docs/kubernetes.md`, observe memory/latency/errors,
    then roll out incrementally.

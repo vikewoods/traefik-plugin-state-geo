@@ -58,8 +58,8 @@ name in production.
 experimental:
   plugins:
     stateGeoBlock:
-      moduleName: github.com/vikewoods/traefik-plugin-state-geo
-      version: vX.Y.Z
+      moduleName: github.com/vikewoods/traefik-plugin-state-geo/v2
+      version: v2.0.0-rc.1
 ```
 
 The alias `stateGeoBlock` is operator-selected but must be used consistently in
@@ -158,8 +158,9 @@ successful swap.
 ## Upgrade and development
 
 Published v1 configurations require migration because trusted headers, path
-prefixes, invalid rules, failure policies, and bundled data behavior changed.
-The beta candidate also hardens several `v2.0.0-alpha` defaults. Read
+prefixes, invalid rules, failure policies, the Go module path, and bundled data
+behavior changed. The release candidate also hardens several
+`v2.0.0-alpha` defaults. Read
 [Migration from v1](docs/migration-v1.md) before upgrading.
 
 ```bash
@@ -172,8 +173,8 @@ gosec -quiet ./...
 ./scripts/traefik-smoke-test.sh
 ```
 
-The smoke test loads the source through Traefik v3.7.1's interpreted local
-plugin runtime and verifies real IPv4/IPv6 decisions. See
+The smoke test loads the source through Traefik v3.7.1 and v3.7.6 interpreted
+local-plugin runtimes and verifies real IPv4/IPv6 decisions. See
 [Contributing](CONTRIBUTING.md) and the [release checklist](docs/release.md).
 
 ## License

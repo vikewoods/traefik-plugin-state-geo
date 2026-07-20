@@ -79,8 +79,15 @@ jobs:
         run: gosec -quiet ./...
 
   traefik-smoke:
+    name: Traefik ${{ matrix.traefik-version }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        traefik-version: [v3.7.1, v3.7.6]
     steps:
       - uses: actions/checkout@v7
-      - name: Test interpreted plugin with Traefik v3.7.1
+      - name: Test interpreted plugin
+        env:
+          TRAEFIK_IMAGE: traefik:${{ matrix.traefik-version }}
         run: ./scripts/traefik-smoke-test.sh

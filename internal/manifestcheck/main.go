@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"os"
 
-	stategeo "github.com/vikewoods/traefik-plugin-state-geo"
+	stategeo "github.com/vikewoods/traefik-plugin-state-geo/v2"
 )
 
 func main() {

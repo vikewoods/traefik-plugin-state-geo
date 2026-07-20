@@ -3,10 +3,14 @@
 The v2 line contains major behavior changes. Do not point production Traefik
 at a branch; migrate a canary to a tested immutable prerelease or final tag.
 
-## Changes after `v2.0.0-alpha`
+## Changes after the earlier v2 prereleases
 
-The beta candidate hardens several alpha defaults:
+The release candidate corrects the v2 module identity and hardens several
+alpha defaults:
 
+- The public plugin module is now
+  `github.com/vikewoods/traefik-plugin-state-geo/v2`. Earlier prerelease
+  configuration without `/v2` cannot be used for the release candidate.
 - `clientIPHeaders` defaults to only `X-Forwarded-For`; provider headers are
   opt-in per route.
 - `rejectInvalidClientIPHeaders` defaults to `true`, so a malformed present
@@ -16,7 +20,25 @@ The beta candidate hardens several alpha defaults:
 - `logLevel` defaults to `info`, and deny decisions are emitted at info.
 - database replacement I/O no longer queues concurrent requests.
 
-Review these fields explicitly when moving an alpha configuration to beta.
+Review these fields explicitly when moving an alpha or beta configuration to
+the release candidate.
+
+## 0. Update the public plugin module
+
+The v2 suffix is required in Traefik's static configuration as well as the Go
+module and plugin manifest:
+
+```yaml
+experimental:
+  abortOnPluginFailure: true
+  plugins:
+    stateGeoBlock:
+      moduleName: github.com/vikewoods/traefik-plugin-state-geo/v2
+      version: v2.0.0-rc.1
+```
+
+Do not reuse the unsuffixed module name from v1 or the earlier v2 prereleases.
+Keep the dynamic alias `stateGeoBlock` unchanged.
 
 ## 1. Configure trusted peers
 

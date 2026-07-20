@@ -1,4 +1,4 @@
-module github.com/vikewoods/traefik-plugin-state-geo
+module github.com/vikewoods/traefik-plugin-state-geo/v2
 
 go 1.23
 

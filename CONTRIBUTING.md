@@ -17,9 +17,10 @@ shellcheck scripts/*.sh
 ./scripts/traefik-smoke-test.sh
 ```
 
-The last command requires Docker and validates the source through Traefik
-v3.7.1's interpreted local-plugin runtime. A native Go build alone is not a
-sufficient compatibility check.
+The last command requires Docker and defaults to Traefik v3.7.6. CI validates
+both v3.7.1 and v3.7.6 interpreted local-plugin runtimes. A native Go build
+alone is not a sufficient compatibility check. Set `TRAEFIK_IMAGE` to exercise
+another reviewed image.
 
 ## Tests
 

@@ -25,16 +25,16 @@ ready replicas, and `externalTrafficPolicy: Cluster`.
 
 ## 1. Enable the released plugin statically
 
-Merge this into the Traefik Helm values and replace `vX.Y.Z` with the new
-release tag:
+Merge this into the Traefik Helm values. The example pins the immutable release
+candidate and must be changed deliberately for a later release:
 
 ```yaml
 experimental:
   abortOnPluginFailure: true
   plugins:
     stateGeoBlock:
-      moduleName: github.com/vikewoods/traefik-plugin-state-geo
-      version: vX.Y.Z
+      moduleName: github.com/vikewoods/traefik-plugin-state-geo/v2
+      version: v2.0.0-rc.1
 ```
 
 Static plugin changes recreate Traefik pods. Keep the alias `stateGeoBlock`

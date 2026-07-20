@@ -7,7 +7,7 @@ run_id="$$"
 network_name="state-geo-smoke-${run_id}"
 backend_name="state-geo-whoami-${run_id}"
 traefik_name="state-geo-traefik-${run_id}"
-traefik_image="${TRAEFIK_IMAGE:-traefik:v3.7.1}"
+traefik_image="${TRAEFIK_IMAGE:-traefik:v3.7.6}"
 whoami_image="${WHOAMI_IMAGE:-traefik/whoami:v1.11.0}"
 
 cleanup() {
@@ -50,13 +50,13 @@ docker run --detach --rm \
   --name "${traefik_name}" \
   --network "${network_name}" \
   --publish 127.0.0.1::8000 \
-  --volume "${repo_root}:/plugins-local/src/github.com/vikewoods/traefik-plugin-state-geo:ro" \
+  --volume "${repo_root}:/plugins-local/src/github.com/vikewoods/traefik-plugin-state-geo/v2:ro" \
   --volume "${repo_root}/testdata/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro" \
   "${traefik_image}" \
   --entrypoints.web.address=:8000 \
   --entrypoints.web.forwardedheaders.insecure=true \
   --providers.file.filename=/etc/traefik/dynamic.yml \
-  --experimental.localplugins.stateGeoBlock.modulename=github.com/vikewoods/traefik-plugin-state-geo \
+  --experimental.localplugins.stateGeoBlock.modulename=github.com/vikewoods/traefik-plugin-state-geo/v2 \
   --log.level=DEBUG >/dev/null
 
 host_address="$(docker port "${traefik_name}" 8000/tcp | sed -n '1s/.*://p')"

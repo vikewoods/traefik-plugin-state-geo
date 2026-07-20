@@ -5,8 +5,15 @@ Versioning for released tags.
 
 ## Unreleased
 
+## v2.0.0-rc.1 - 2026-07-20
+
 ### Breaking
 
+- The Go module, Traefik manifest import, and static `moduleName` now use
+  `github.com/vikewoods/traefik-plugin-state-geo/v2`, as required for v2 Go
+  modules. The manifest declares the existing Go package through `basePkg` so
+  Yaegi does not mistake the version suffix for the package name.
+  Configurations copied from an earlier v2 prerelease must add `/v2`.
 - `clientIPHeaders` now defaults to only `X-Forwarded-For`; Cloudflare,
   True-Client-IP, RFC `Forwarded`, X-Real-IP, and custom headers are opt-in.
 - Present-but-invalid headers from trusted peers are rejected by default via
@@ -16,6 +23,7 @@ Versioning for released tags.
 
 ### Added
 
+- Interpreted-plugin CI coverage for both Traefik v3.7.1 and v3.7.6.
 - Privacy-safe warnings for malformed trusted client-IP headers.
 - Link-local and unspecified client addresses are governed by
   `privateIPPolicy`.
@@ -24,6 +32,9 @@ Versioning for released tags.
 
 ### Fixed
 
+- v2 tags can now be resolved by the Go module proxy and Traefik public plugin
+  registry instead of failing because the module path omitted `/v2`. The local
+  and published Yaegi loaders also receive the correct package name.
 - Requests no longer queue behind full MMDB reads during an atomic database
   reload; one request performs the reload while others retain the current
   immutable reader. Atomic deadlines and immutable snapshot publication also
