@@ -69,7 +69,9 @@ func (c *decisionCache) get(key string, databaseVersion uint64) (cacheEntry, boo
 
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	c.resetForVersion(databaseVersion)
+	if !c.acceptVersion(databaseVersion) {
+		return cacheEntry{}, false
+	}
 
 	element, exists := c.entries[key]
 	if !exists {
@@ -98,7 +100,9 @@ func (c *decisionCache) set(key string, databaseVersion uint64, decision cacheEn
 
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	c.resetForVersion(databaseVersion)
+	if !c.acceptVersion(databaseVersion) {
+		return
+	}
 
 	expiresAt := c.now().Add(c.ttl)
 	if element, exists := c.entries[key]; exists {
@@ -129,14 +133,20 @@ func (c *decisionCache) set(key string, databaseVersion uint64, decision cacheEn
 	}
 }
 
-func (c *decisionCache) resetForVersion(databaseVersion uint64) {
-	if c.databaseVersion == databaseVersion {
-		return
+func (c *decisionCache) acceptVersion(databaseVersion uint64) bool {
+	if databaseVersion < c.databaseVersion {
+		// A stale in-flight request can finish after a newer immutable
+		// database snapshot has already been published.
+		return false
+	}
+	if databaseVersion == c.databaseVersion {
+		return true
 	}
 
 	c.entries = make(map[string]*list.Element, c.capacity)
 	c.recency.Init()
 	c.databaseVersion = databaseVersion
+	return true
 }
 
 func (c *decisionCache) remove(key string, element *list.Element) {

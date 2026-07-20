@@ -5,6 +5,18 @@ Versioning for released tags.
 
 ## Unreleased
 
+### Added
+
+- Documented and tested native and Traefik-interpreted compatibility with
+  compact stategeodb `StateGeo-Country-USSubdivision` artifacts while
+  preserving GeoLite2-City and GeoIP2-City support.
+
+### Fixed
+
+- Decision-cache generations are monotonic across concurrent database reloads.
+  Stale in-flight reads now miss and stale writes are discarded without
+  regressing the active generation or clearing current decisions.
+
 ## v2.0.0-rc.1 - 2026-07-20
 
 ### Breaking

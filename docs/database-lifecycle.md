@@ -2,9 +2,17 @@
 
 ## Process-level database sharing
 
-The vendored Yaegi-compatible MaxMind reader loads the complete MMDB into a Go byte slice. Loading one reader per Middleware resource would therefore multiply the roughly 65.9 MB live database by every Middleware instance in each Traefik pod.
+The vendored Yaegi-compatible MaxMind reader loads the complete selected MMDB
+into a Go byte slice, whether it is a MaxMind City database or a compact
+stategeodb compliance artifact. Loading one reader per Middleware resource
+would therefore multiply that artifact's size by every Middleware instance in
+each Traefik pod.
 
-The plugin now keeps a process-level registry keyed by the normalized absolute `dbPath`. Every Middleware using the same path receives the same `databaseManager` and immutable reader. In the audited deployment this means one full database copy per Traefik process, not one copy per Middleware resource. Each of the three Traefik pods still owns its own process memory, as expected.
+The plugin keeps a process-level registry keyed by the normalized absolute
+`dbPath`. Every Middleware using the same path receives the same
+`databaseManager` and immutable reader. This means one full copy per normalized
+database path and Traefik process, not one copy per Middleware resource. Each
+Traefik pod still owns its own process memory.
 
 The registry intentionally lives for the Traefik process lifetime because the Traefik middleware plugin API has no matching lifecycle callback for releasing an individual Middleware. The number of retained managers is bounded by the number of unique configured database paths, which operators should keep small.
 
@@ -41,12 +49,15 @@ process restart.
 
 The current pure-Go reader has no OS mapping to close. An in-flight request holds an interface reference to its immutable reader snapshot, so the old byte slice remains alive until that request finishes and is then garbage collected. If the vendored reader is later changed back to mmap, reader leasing and `Close` behavior must be reevaluated before that upgrade is accepted.
 
-The complete database byte slice is process memory, not page-cache-only mmap
-state. During a successful reload, old and new roughly 60–70 MiB database
-copies coexist until in-flight requests release the old snapshot and the Go
-garbage collector reclaims it. For the audited database, reserve at least
-about 150 MiB of additional pod memory above Traefik's measured baseline, then
-validate heap and OOM headroom during the canary on the real storage backend.
+The complete selected artifact byte slice is Go process memory, not
+page-cache-only mmap state. During a successful reload, old and new byte slices
+can coexist until in-flight requests release the old snapshot and the Go
+garbage collector reclaims it. Headroom therefore depends on the selected
+artifact size plus Traefik's measured baseline and other heap use. The tested
+stategeodb compliance artifact was 16,419,258 bytes (about 16.4 MB); that is an
+artifact measurement, not a Traefik pod RSS measurement or a universal sizing
+recommendation. Measure pod memory after initial load and during an atomic
+replacement on the real canary storage backend.
 
 ## Bounded TTL/LRU decision cache
 
@@ -64,7 +75,12 @@ Behavior:
 - Enabled caches require a positive TTL.
 - Access refreshes recency but does not extend TTL; `set` refreshes TTL.
 - The least-recently-used entry is evicted at capacity.
-- A database generation change clears the cache before the next read or write.
+- Cache generations advance monotonically. The first accepted read or write
+  for a newer generation clears older entries once.
+- An in-flight request may finish using its immutable older reader after a
+  newer snapshot is published. Its stale cache read is a miss and its stale
+  write is discarded; neither operation can regress the active generation,
+  clear current entries, refresh TTL, or change LRU order.
 - Lookup errors and database-unavailable decisions are not cached.
 - Private-address allow/deny shortcuts are not cached.
 - Keys remain exact normalized IPv4/IPv6 addresses. Collapsing IPv6 clients to
@@ -91,6 +107,8 @@ correctness.
   I/O and parsing occur before atomic publication, so lookups continue on the
   last good reader during a replacement open.
 - The cache uses a short mutex around its map/list invariants.
+- Generation comparison and cache invalidation occur under that existing cache
+  mutex; no additional lock or background work is introduced.
 - No goroutine, timer, or channel is retained by the feature.
 
 Race-detector tests exercise concurrent cache access and concurrent manager snapshots/reloads.

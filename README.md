@@ -1,10 +1,11 @@
 # State Geo Block Middleware
 
 State Geo Block is a Traefik HTTP middleware that blocks non-US traffic and
-selected US subdivisions using a mounted MaxMind GeoLite2 or GeoIP2 City
-database. It supports trusted Cloudflare and proxy headers, direct connections,
-IPv4 and IPv6, explicit failure policies, database hot reload, and custom block
-pages.
+selected US subdivisions using a mounted compatible City-schema MMDB. It
+supports MaxMind GeoLite2-City and GeoIP2-City directly, as well as compact
+stategeodb compliance artifacts. It also supports trusted Cloudflare and proxy
+headers, direct connections, IPv4 and IPv6, explicit failure policies,
+database hot reload, and custom block pages.
 
 [![CI](https://github.com/vikewoods/traefik-plugin-state-geo/actions/workflows/ci.yml/badge.svg)](https://github.com/vikewoods/traefik-plugin-state-geo/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/vikewoods/traefik-plugin-state-geo/actions/workflows/codeql.yml/badge.svg)](https://github.com/vikewoods/traefik-plugin-state-geo/actions/workflows/codeql.yml)
@@ -114,7 +115,7 @@ canary instructions are in [Kubernetes deployment](docs/kubernetes.md).
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `dbPath` | empty | Path inside the Traefik container to a MaxMind City MMDB. |
+| `dbPath` | empty | Path inside the Traefik container to a compatible City-schema MMDB. |
 | `databaseReloadInterval` | `1m` | Minimum interval between request-driven file replacement checks; minimum `1s`. |
 | `cacheSize` | `1000` | Per-Middleware exact-IP LRU entry bound; `0` disables, maximum `100000`. High-cardinality ingress can start near `50000` and tune from memory/hit-rate evidence. |
 | `cacheTTL` | `15m` | Positive decision TTL when caching is enabled. |
@@ -147,13 +148,22 @@ See [Failure policies](docs/failure-policies.md),
 
 ## Database requirements
 
-The repository does not ship a production GeoLite2 database. Obtain and update
-`GeoLite2-City.mmdb` under the
-[MaxMind GeoLite terms](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data),
-mount it read-only into Traefik, and replace it atomically. The plugin detects a
-size or modification-time change, validates the replacement, retains the last
-known-good reader if reload fails, and invalidates cached decisions after a
-successful swap.
+The repository does not ship a production database. Operators may mount a
+MaxMind GeoLite2-City or GeoIP2-City database, or a compact stategeodb
+compliance artifact. The compact format supplies country data globally and the
+first subdivision only for US records, matching this middleware's country-first,
+US-state-only policy inputs; all allow, deny, unknown-data, and failure behavior
+still comes entirely from plugin configuration.
+
+Mount the selected artifact read-only into Traefik and replace it atomically.
+The plugin detects a size or modification-time change, validates the
+replacement, retains the last known-good reader if reload fails, and
+invalidates cached decisions after a successful swap. See
+[MMDB compatibility](docs/compatibility.md) and
+[Database lifecycle](docs/database-lifecycle.md) for the exact schema,
+validation evidence, cache generation behavior, and memory model. GeoLite2
+users remain responsible for the
+[MaxMind GeoLite terms](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data).
 
 ## Upgrade and development
 

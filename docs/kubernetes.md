@@ -13,7 +13,8 @@ cluster.
 
 - Traefik v3 with the Kubernetes CRD provider enabled.
 - A released plugin tag, not a branch or uncommitted revision.
-- A MaxMind GeoLite2-City or GeoIP2-City MMDB mounted into every Traefik pod.
+- A compatible MMDB mounted into every Traefik pod: MaxMind GeoLite2-City,
+  GeoIP2-City, or a compact stategeodb compliance artifact.
 - A known immediate-peer trust boundary for both Traefik entry points and this
   plugin.
 - Routes that actually pass through Traefik. The audited cloudflared routes
@@ -61,16 +62,27 @@ additionalVolumeMounts:
     readOnly: true
 ```
 
-The expected database path is
-`/data/geolite/GeoLite2-City.mmdb`. At audit time it was 65,864,808 bytes, had
+The audited database path is `/data/geolite/GeoLite2-City.mmdb`. At audit time
+it was 65,864,808 bytes, had
 SHA-256 `e2765534f9fc6e0bcda4c46d8bc58bfac5feea6ca2d5581219e53c99cd3b073d`,
 was built on 2026-07-14, and declared IP version 6 (IPv4 and IPv6 records).
-Those values are evidence, not permanent assertions.
+Those values are GeoLite2 deployment evidence, not permanent assertions and
+not evidence that a compact artifact was deployed to the audited cluster.
 
-The updater should write a temporary complete database and atomically rename
-it over the live file. The plugin checks size and modification time once per
+A compact stategeodb artifact can instead be mounted at, for example,
+`/data/geolite/stategeodb.mmdb`. Set the Middleware `dbPath` to the exact path
+chosen for the mounted file. Native and interpreted compatibility tests cover
+the compact format, but its Longhorn synchronization, reload timing, file
+permissions, proxy path, and pod-memory behavior still require the same cluster
+canary as any replacement artifact. A mode such as `0644` is suitable when the
+updater and Traefik use different runtime UIDs, provided every parent directory
+is traversable by the Traefik process.
+
+The updater must write a temporary complete database and atomically rename it
+over the live file. The plugin checks size and modification time once per
 `databaseReloadInterval`, validates a new reader before swapping it, retains
-the last known-good reader on failure, and clears decisions after success.
+the last known-good reader on failure, and clears older decisions after a
+successful generation advance.
 
 ## 3. Preserve forwarding chains in Traefik
 
@@ -257,19 +269,21 @@ Observe status codes, warnings, latency, memory per pod, and false positives.
 The audited traffic was approximately 63.2% IPv6 client identities, so IPv6 is
 a mandatory canary case.
 
-The vendored pure-Go reader retains the full roughly 60–70 MiB MMDB on the Go
-heap and temporarily overlaps old/new copies during reload. Start with about
-150 MiB of pod-memory headroom above Traefik's measured baseline. The
-`cacheSize: 50000` value is a high-cardinality ingress starting point; tune it
-from observed heap use and cache effectiveness because every Middleware owns
-an independent cache.
+The vendored pure-Go reader retains the complete selected MMDB in a Go byte
+slice and can temporarily overlap old and new slices during reload. The tested
+compact compliance artifact was 16,419,258 bytes (about 16.4 MB), while the
+audited GeoLite2 file above was 65,864,808 bytes. These are artifact sizes, not
+measured Traefik pod RSS. Size the canary from the selected artifact plus the
+measured Traefik baseline, then observe initial load and a forced atomic
+replacement. The `cacheSize: 50000` value is a high-cardinality ingress
+starting point; tune it from observed heap use and cache effectiveness because
+every Middleware owns an independent cache.
 
-On 2026-07-19, the three live Traefik containers used 91, 93, and 98 MiB. The
-deployment requested 192 MiB and limited memory to 512 MiB before the plugin
-was enabled. The example Helm values therefore raise the request to 320 MiB
-for the canary and retain the 512 MiB limit. Re-measure after the reader is
-loaded and during a forced atomic replacement; these values are an initial
-scheduling budget, not a guaranteed requirement for every workload.
+On 2026-07-19, the three live Traefik containers used 91, 93, and 98 MiB before
+the plugin was enabled. The deployment requested 192 MiB and limited memory to
+512 MiB. Treat those observations only as the audited baseline; choose and
+validate canary resources from the artifact actually mounted rather than
+carrying forward an unmeasured universal RSS recommendation.
 
 As the final go-live gate, send a request from a known blocked-state source
 through the real external load-balancer path and require a 403. That validates

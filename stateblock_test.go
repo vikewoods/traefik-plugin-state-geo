@@ -2,11 +2,14 @@ package traefik_plugin_state_geo
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 const testDatabasePath = "testdata/GeoIP2-City-Test.mmdb"
@@ -15,6 +18,18 @@ type mockGeoResult struct {
 	country   string
 	state     string
 	lookupErr error
+}
+
+type testGeoDatabase struct {
+	lookup func(*geoRecord) error
+}
+
+func (d *testGeoDatabase) Lookup(_ net.IP, destination any) error {
+	record, ok := destination.(*geoRecord)
+	if !ok {
+		return fmt.Errorf("lookup destination type = %T, want *geoRecord", destination)
+	}
+	return d.lookup(record)
 }
 
 func newTestMiddleware(t *testing.T, cfg *Config, geo mockGeoResult) *stateBlock {
@@ -907,5 +922,91 @@ func TestMiddlewareUsesResolvedIPv6ClientIPForGeoLookup(t *testing.T) {
 	}
 	if lookedUpIP != "2606:4700:4700::1111" {
 		t.Fatalf("GeoIP lookup address = %q, want %q", lookedUpIP, "2606:4700:4700::1111")
+	}
+}
+
+func TestStateBlockDecisionCacheStaleRequestCannotRegressGeneration(t *testing.T) {
+	cfg := CreateConfig()
+	cfg.CacheSize = 4
+	cfg.PrivateIPPolicy = "lookup"
+	handler := newTestMiddleware(t, cfg, mockGeoResult{})
+	handler.mockGeoLookup = nil
+
+	oldLookupStarted := make(chan struct{})
+	releaseOldLookup := make(chan struct{})
+	var releaseOldLookupOnce sync.Once
+	releaseOld := func() {
+		releaseOldLookupOnce.Do(func() {
+			close(releaseOldLookup)
+		})
+	}
+	t.Cleanup(releaseOld)
+	oldReader := &testGeoDatabase{
+		lookup: func(record *geoRecord) error {
+			close(oldLookupStarted)
+			<-releaseOldLookup
+			record.Country.IsoCode = "GB"
+			return nil
+		},
+	}
+	newLookupCount := 0
+	newReader := &testGeoDatabase{
+		lookup: func(record *geoRecord) error {
+			newLookupCount++
+			record.Country.IsoCode = "US"
+			record.Subdivisions = append(record.Subdivisions, struct {
+				IsoCode string `maxminddb:"iso_code"`
+			}{IsoCode: "WA"})
+			return nil
+		},
+	}
+
+	manager := newDatabaseManager("testdata/interleaving.mmdb", time.Hour)
+	manager.snapshotValue.Store(databaseSnapshot{reader: oldReader, version: 1})
+	manager.nextCheckUnixNano.Store(time.Now().Add(time.Hour).UnixNano())
+	handler.dbManager = manager
+
+	serve := func() int {
+		request := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+		request.RemoteAddr = "8.8.8.8:443"
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response.Code
+	}
+
+	oldStatus := make(chan int, 1)
+	go func() {
+		oldStatus <- serve()
+	}()
+	select {
+	case <-oldLookupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("generation-one request did not reach the blocked lookup")
+	}
+
+	manager.snapshotValue.Store(databaseSnapshot{reader: newReader, version: 2})
+	if status := serve(); status != http.StatusOK {
+		t.Fatalf("generation-two request status = %d, want %d", status, http.StatusOK)
+	}
+	if newLookupCount != 1 {
+		t.Fatalf("generation-two lookup count = %d, want 1", newLookupCount)
+	}
+
+	releaseOld()
+	var generationOneStatus int
+	select {
+	case generationOneStatus = <-oldStatus:
+	case <-time.After(time.Second):
+		t.Fatal("generation-one request did not finish after lookup release")
+	}
+	if generationOneStatus != http.StatusForbidden {
+		t.Fatalf("generation-one request status = %d, want %d", generationOneStatus, http.StatusForbidden)
+	}
+
+	if status := serve(); status != http.StatusOK {
+		t.Fatalf("cached generation-two request status = %d, want %d", status, http.StatusOK)
+	}
+	if newLookupCount != 1 {
+		t.Fatalf("generation-two lookup count after stale completion = %d, want retained cache hit", newLookupCount)
 	}
 }
