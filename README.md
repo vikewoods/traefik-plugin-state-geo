@@ -59,8 +59,8 @@ name in production.
 experimental:
   plugins:
     stateGeoBlock:
-      moduleName: github.com/vikewoods/traefik-plugin-state-geo/v2
-      version: v2.0.0-rc.2
+      moduleName: github.com/vikewoods/traefik-plugin-state-geo
+      version: v1.2.0-rc.1
 ```
 
 The alias `stateGeoBlock` is operator-selected but must be used consistently in
@@ -167,10 +167,10 @@ users remain responsible for the
 
 ## Upgrade and development
 
-Published v1 configurations require migration because trusted headers, path
-prefixes, invalid rules, failure policies, the Go module path, and bundled data
-behavior changed. The release candidate also hardens several
-`v2.0.0-alpha` defaults. Read
+Published v1.1 configurations require migration because trusted headers, path
+prefixes, invalid rules, failure policies, and bundled data behavior changed.
+The release candidate also hardens defaults from the withdrawn v2
+prereleases. Read
 [Migration from v1](docs/migration-v1.md) before upgrading.
 
 ```bash

@@ -156,14 +156,14 @@ start_traefik() {
     --name "${traefik_name}" \
     --network "${network_name}" \
     --publish 127.0.0.1::8000 \
-    --volume "${repo_root}:/plugins-local/src/github.com/vikewoods/traefik-plugin-state-geo/v2:ro" \
+    --volume "${repo_root}:/plugins-local/src/github.com/vikewoods/traefik-plugin-state-geo:ro" \
     --volume "${dynamic_config}:/etc/traefik/dynamic.yml:ro" \
     "$@" \
     "${traefik_image}" \
     --entrypoints.web.address=:8000 \
     --entrypoints.web.forwardedheaders.insecure=true \
     --providers.file.filename=/etc/traefik/dynamic.yml \
-    --experimental.localplugins.stateGeoBlock.modulename=github.com/vikewoods/traefik-plugin-state-geo/v2 \
+    --experimental.localplugins.stateGeoBlock.modulename=github.com/vikewoods/traefik-plugin-state-geo \
     --log.level=DEBUG >/dev/null 2>"${temporary_root}/docker-start.stderr"; then
     if [[ "${real_artifact}" != true ]]; then
       sed -n '1,80p' "${temporary_root}/docker-start.stderr" >&2

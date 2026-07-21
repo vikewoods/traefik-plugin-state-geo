@@ -1,7 +1,7 @@
 # Release checklist
 
-Use this checklist for every v2 prerelease and final release. Do not publish or
-deploy a new tag until every required item below passes.
+Use this checklist for every v1.2 compatibility prerelease and final release.
+Do not publish or deploy a new tag until every required item below passes.
 
 ## Repository and legal
 
@@ -18,18 +18,17 @@ deploy a new tag until every required item below passes.
 - [ ] The public GitHub repository is not a fork and has the `traefik-plugin`
       topic.
 - [ ] `.traefik.yml` is at repository root and its `import` exactly matches
-      `go.mod` (`github.com/vikewoods/traefik-plugin-state-geo/v2`).
+      `go.mod` (`github.com/vikewoods/traefik-plugin-state-geo`).
 - [ ] `.traefik.yml` `testData` constructs the Middleware and opens the tiny
       deterministic database.
-- [ ] `.traefik.yml` `basePkg` matches the root Go package so the `/v2` suffix
-      is not treated as the Yaegi package identifier.
+- [ ] `.traefik.yml` `basePkg` matches the root Go package.
 - [ ] Dependencies are committed under `vendor/`.
 - [ ] The package exports `Config`, `CreateConfig`, and `New` with the required
       Traefik signatures.
 - [ ] The release tag uses semantic `vMAJOR.MINOR.PATCH` or
       `vMAJOR.MINOR.PATCH-PRERELEASE` form.
-- [ ] The release major matches the Go semantic-import suffix (`v2` uses
-      module and manifest path `/v2`).
+- [ ] The v1 release uses the repository-root module path without a major
+      suffix.
 
 ## Verification
 
@@ -61,7 +60,7 @@ git diff --check
 
 1. Create and push the immutable annotated tag.
 2. Confirm the tag is available through the Go module proxy under
-   `github.com/vikewoods/traefik-plugin-state-geo/v2`.
+   `github.com/vikewoods/traefik-plugin-state-geo`.
 3. Confirm the exact tag returns HTTP 200 from Traefik's public download and
    validation endpoints before changing a cluster.
 4. Wait for the Traefik Plugin Catalog polling cycle.

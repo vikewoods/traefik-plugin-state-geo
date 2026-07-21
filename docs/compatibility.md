@@ -2,22 +2,19 @@
 
 | Plugin line | Traefik runtime | Go for native checks | Status |
 | --- | --- | --- | --- |
-| v2.0.0-rc.2 | v3.7.1 and v3.7.6 / Yaegi | 1.23 minimum; current stable in CI | Current release candidate; native and interpreted validation required before tagging |
-| v2.0.0-rc.1 | v3.7.1 and v3.7.6 / Yaegi | 1.23 minimum; current stable in CI | Earlier release candidate; superseded by rc.2 |
-| v2.0.0-beta | v3.7.1 / Yaegi | 1.23 | Catalog indexed, but not downloadable because its Go module path omitted `/v2` |
-| v2.0.0-alpha | v3.7.1 / Yaegi | 1.23 | Published prerelease; superseded by the hardened release candidate |
+| v1.2.0-rc.1 | v3.7.1 and v3.7.6 / Yaegi | 1.23 minimum; current stable in CI | Current compatibility release candidate; native and interpreted validation required before tagging |
+| v2.0.0 prereleases | v3.7.1 and v3.7.6 / Yaegi | 1.23 | Withdrawn: Traefik's public plugin registry cannot install the `/v2` module path reliably |
 | v1.1.2 | Traefik v3-era local plugin deployment | 1.23 | Published legacy behavior; Kubernetes hardening is not present |
 
-The v2 line is tested against Traefik v3.7.1 from the audited VS cluster and
-v3.7.6 from the FE production cluster. Other Traefik minor releases may use a
-different Yaegi version and require the same smoke test before being declared
-supported.
+The v1.2 compatibility line is tested against Traefik v3.7.1 from the audited
+VS cluster and v3.7.6 from the FE production cluster. Other Traefik minor
+releases may use a different Yaegi version and require the same smoke test
+before being declared supported.
 
-The v2 release line must be configured with module name
-`github.com/vikewoods/traefik-plugin-state-geo/v2`. The repository URL remains
-unchanged; `/v2` is the Go semantic-import-version suffix. The plugin manifest
-sets `basePkg: traefik_plugin_state_geo` because Traefik otherwise derives the
-Yaegi package name from the final `v2` path segment.
+The compatibility release must be configured with module name
+`github.com/vikewoods/traefik-plugin-state-geo`. The plugin manifest keeps
+`basePkg: traefik_plugin_state_geo` explicit so the catalog and Yaegi use the
+root package name consistently.
 
 ## MMDB data compatibility
 

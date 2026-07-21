@@ -23,7 +23,7 @@ http:
             - 0.0.0.0/0
             - ::/0
           rejectInvalidClientIPHeaders: true
-          dbPath: /plugins-local/src/github.com/vikewoods/traefik-plugin-state-geo/v2/testdata/GeoIP2-City-Test.mmdb
+          dbPath: /plugins-local/src/github.com/vikewoods/traefik-plugin-state-geo/testdata/GeoIP2-City-Test.mmdb
           databaseFailurePolicy: error
           lookupFailurePolicy: deny
           invalidClientIPPolicy: deny

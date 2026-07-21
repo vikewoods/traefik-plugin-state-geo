@@ -1,16 +1,20 @@
-# Migration from v1
+# Migration from v1.1
 
-The v2 line contains major behavior changes. Do not point production Traefik
-at a branch; migrate a canary to a tested immutable prerelease or final tag.
+The v1.2 line contains behavior changes that would ordinarily require a major
+version. Traefik's public plugin registry cannot currently install Go module
+paths with a `/v2` semantic-import suffix, so this compatibility release keeps
+the repository-root v1 module identity. Treat the upgrade as breaking. Do not
+point production Traefik at a branch; migrate a canary to a tested immutable
+prerelease or final tag.
 
-## Changes after the earlier v2 prereleases
+## Changes after the withdrawn v2 prereleases
 
-The release candidate corrects the v2 module identity and hardens several
-alpha defaults:
+The release candidate restores the installable public module identity and
+hardens several earlier prerelease defaults:
 
 - The public plugin module is now
-  `github.com/vikewoods/traefik-plugin-state-geo/v2`. Earlier prerelease
-  configuration without `/v2` cannot be used for the release candidate.
+  `github.com/vikewoods/traefik-plugin-state-geo`. Configuration containing
+  `/v2` cannot be used with the public plugin registry.
 - `clientIPHeaders` defaults to only `X-Forwarded-For`; provider headers are
   opt-in per route.
 - `rejectInvalidClientIPHeaders` defaults to `true`, so a malformed present
@@ -23,22 +27,21 @@ alpha defaults:
 Review these fields explicitly when moving an alpha or beta configuration to
 the release candidate.
 
-## 0. Update the public plugin module
+## 0. Pin the public compatibility release
 
-The v2 suffix is required in Traefik's static configuration as well as the Go
-module and plugin manifest:
+Use the repository-root module in Traefik's static configuration:
 
 ```yaml
 experimental:
   abortOnPluginFailure: true
   plugins:
     stateGeoBlock:
-      moduleName: github.com/vikewoods/traefik-plugin-state-geo/v2
-      version: v2.0.0-rc.2
+      moduleName: github.com/vikewoods/traefik-plugin-state-geo
+      version: v1.2.0-rc.1
 ```
 
-Do not reuse the unsuffixed module name from v1 or the earlier v2 prereleases.
-Keep the dynamic alias `stateGeoBlock` unchanged.
+Do not use the `/v2` module name from the withdrawn release candidates. Keep
+the dynamic alias `stateGeoBlock` unchanged.
 
 ## 1. Configure trusted peers
 
@@ -147,7 +150,7 @@ Explicit `whitelistedIPs`, `whitelistedPaths`, and
 
 ## Suggested canary order
 
-1. Publish and pin the new major tag in non-production Traefik.
+1. Publish and pin the compatibility prerelease in non-production Traefik.
 2. Verify MMDB mount and plugin startup on every replica.
 3. Attach a strict Middleware to one controlled route.
 4. Test Cloudflare IPv4 and IPv6, XFF fallback, malformed headers, a blocked

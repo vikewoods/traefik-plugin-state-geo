@@ -34,8 +34,8 @@ experimental:
   abortOnPluginFailure: true
   plugins:
     stateGeoBlock:
-      moduleName: github.com/vikewoods/traefik-plugin-state-geo/v2
-      version: v2.0.0-rc.2
+      moduleName: github.com/vikewoods/traefik-plugin-state-geo
+      version: v1.2.0-rc.1
 ```
 
 Static plugin changes recreate Traefik pods. Keep the alias `stateGeoBlock`

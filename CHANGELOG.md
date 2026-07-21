@@ -5,7 +5,21 @@ Versioning for released tags.
 
 ## Unreleased
 
-## v2.0.0-rc.2 - 2026-07-20
+## v1.2.0-rc.1 - 2026-07-21
+
+### Compatibility
+
+- Restored the installable repository-root module identity,
+  `github.com/vikewoods/traefik-plugin-state-geo`. Traefik's public plugin
+  registry currently misinterprets the Go `/v2` semantic-import suffix as a
+  GitHub repository name.
+- Republished the hardened middleware as a v1 compatibility prerelease. This
+  release contains breaking behavior changes from v1.1; operators must follow
+  `docs/migration-v1.md` and validate a canary before rollout.
+- Updated catalog metadata, examples, smoke tests, and release validation for
+  `v1.2.0-rc.1`.
+
+## v2.0.0-rc.2 - 2026-07-20 (withdrawn)
 
 ### Added
 
@@ -19,15 +33,14 @@ Versioning for released tags.
   Stale in-flight reads now miss and stale writes are discarded without
   regressing the active generation or clearing current decisions.
 
-## v2.0.0-rc.1 - 2026-07-20
+## v2.0.0-rc.1 - 2026-07-20 (withdrawn)
 
 ### Breaking
 
-- The Go module, Traefik manifest import, and static `moduleName` now use
-  `github.com/vikewoods/traefik-plugin-state-geo/v2`, as required for v2 Go
-  modules. The manifest declares the existing Go package through `basePkg` so
-  Yaegi does not mistake the version suffix for the package name.
-  Configurations copied from an earlier v2 prerelease must add `/v2`.
+- The Go module, Traefik manifest import, and static `moduleName` used the Go
+  `/v2` semantic-import suffix. This was valid Go module versioning but proved
+  incompatible with Traefik's public plugin registry, so the prerelease was
+  withdrawn.
 - `clientIPHeaders` now defaults to only `X-Forwarded-For`; Cloudflare,
   True-Client-IP, RFC `Forwarded`, X-Real-IP, and custom headers are opt-in.
 - Present-but-invalid headers from trusted peers are rejected by default via
@@ -46,9 +59,9 @@ Versioning for released tags.
 
 ### Fixed
 
-- v2 tags can now be resolved by the Go module proxy and Traefik public plugin
-  registry instead of failing because the module path omitted `/v2`. The local
-  and published Yaegi loaders also receive the correct package name.
+- v2 tags could be resolved by the Go module proxy and local Yaegi loader, but
+  Traefik's public registry could not retrieve the dependency-bearing plugin
+  from GitHub because it treated `/v2` as the repository name.
 - Requests no longer queue behind full MMDB reads during an atomic database
   reload; one request performs the reload while others retain the current
   immutable reader. Atomic deadlines and immutable snapshot publication also
@@ -58,7 +71,7 @@ Versioning for released tags.
 - IP whitelist checks use the already parsed address instead of reparsing its
   string representation.
 
-## v2.0.0-alpha - 2026-07-19
+## v2.0.0-alpha - 2026-07-19 (withdrawn)
 
 ### Breaking
 

@@ -1,6 +1,6 @@
 displayName: State Geo Block Middleware
 type: middleware
-import: github.com/vikewoods/traefik-plugin-state-geo/v2
+import: github.com/vikewoods/traefik-plugin-state-geo
 basePkg: traefik_plugin_state_geo
 runtime: yaegi
 
